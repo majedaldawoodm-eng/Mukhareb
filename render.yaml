@@ -6,7 +6,7 @@ services:
     runtime: node
     plan: free
     branch: claude/claude-rc-p94npp
-    buildCommand: ""
+    buildCommand: node --version   # ما فيه اعتماديات ولا بناء، لكن Render يطلب أمرًا
     startCommand: node server.js
     envVars:
       - key: NODE_VERSION
