@@ -126,7 +126,7 @@ class Client {
         this.msgs++;
         let m;
         try { m = JSON.parse(e.data); } catch { this.errors.push("bad json"); return; }
-        if (m.t === "you") this.id = m.id;
+        if (m.t === "you") { this.id = m.id; this.token = m.token; this.back = !!m.back; }
         else if (m.t === "err") { this.errors.push(m.m); vlog(`[${this.name}] err: ${m.m}`); }
         else if (m.t === "kick") { this.errors.push("kick"); log(`[${this.name}] انطرد`); }
         else if (m.t === "s") this.onState(m);
@@ -134,7 +134,7 @@ class Client {
     });
   }
   send(o) { if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(o)); }
-  join() { this.send({ t: "join", name: this.name }); }
+  join(token) { this.send(token ? { t: "join", name: this.name, token } : { t: "join", name: this.name }); }
   onState(m) {
     const prev = this.st;
     this.st = m;

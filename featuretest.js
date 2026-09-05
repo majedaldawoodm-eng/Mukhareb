@@ -20,6 +20,8 @@ async function walkTo(c, x, y, within, timeoutMs = 40000) {
     await sleep(50);
     const t = now(), dt = Math.min(0.2, (t - last) / 1000); last = t;
     if (!c.path.length) c.path = pathR(c.x, c.y, x, y);
+    // المسار ينتهي عند أقرب مركز خلية للهدف، فقد يقصر عنه بأقل من خلية
+    if (c.path.length <= 1 && Math.hypot(c.x - x, c.y - y) < within + S.CELL) break;
     if (!c.path.length) break;
     const [wx, wy] = c.path[0];
     const dx = wx - c.x, dy = wy - c.y, d = Math.hypot(dx, dy);
@@ -165,13 +167,83 @@ async function testCone(url) {
   for (const x of cs) x.close();
 }
 
+async function testReconnect(url) {
+  console.log("\n▶ إعادة الاتصال");
+  const cs = await setup(url, 3);
+  const host = cs[0];
+  check(cs.every((c) => typeof c.token === "string" && c.token.length >= 16), "كل لاعب استلم سرًا للرجوع");
+  await waitFor(() => host.st.host, 2000, "المضيف");
+  host.send({ t: "start" });
+  await waitFor(() => cs.every((c) => c.st.ph === "play"), 3000, "بداية الجولة");
+  const gone = cs[2];
+  const before = { id: gone.id, imp: gone.st.me.imp, tasks: gone.st.me.tasks.slice(), token: gone.token };
+  // يمشي شوي عشان يكون له موقع غير نقطة البداية
+  await walkTo(gone, S.SPAWN.x, S.SPAWN.y - 120, 10);
+  await sleep(150);
+  const pos = { x: gone.st.me.x, y: gone.st.me.y };
+
+  // انقطاع
+  gone.close();
+  await waitFor(() => host.st.all.find((p) => p.i === before.id)?.o === 1, 2000, "علامة منقطع");
+  check(host.st.ph === "play", "الجولة استمرت بعد الانقطاع");
+  check(host.st.all.length === 3, "مقعده محفوظ (ما زال في القائمة)");
+  check(host.st.all.find((p) => p.i === before.id).o === 1, "معلَّم عند الباقين إنه منقطع");
+
+  // سر خاطئ أثناء الجولة → رفض
+  const bogus = new Client(url, "دخيل");
+  await bogus.connect();
+  bogus.join("ffffffffffffffffffffffff");
+  await sleep(300);
+  check(bogus.id === null && bogus.errors.length === 1, `سر خاطئ أثناء الجولة مرفوض: ${bogus.errors[0]}`);
+  bogus.close();
+
+  // رجوع خلال المهلة بنفس السر
+  await sleep(1500);
+  const back = new Client(url, "لاعب3");
+  await back.connect();
+  back.join(before.token);
+  await waitFor(() => back.id !== null && back.st, 2000, "الرجوع");
+  check(back.back === true, "السيرفر قال إنها عودة (back)");
+  check(back.id === before.id, `نفس المعرّف ${back.id}`);
+  check(back.st.me.imp === before.imp, "نفس الدور");
+  check(JSON.stringify(back.st.me.tasks) === JSON.stringify(before.tasks), "نفس المهام");
+  check(Math.hypot(back.st.me.x - pos.x, back.st.me.y - pos.y) < 1, "نفس الموقع");
+  check(back.st.ph === "play" && host.st.all.find((p) => p.i === before.id).o === 0, "رجع للجولة وانشالت علامة منقطع");
+  // يقدر يتحرك بعد الرجوع
+  await nudge(back, 0, -12);
+  await sleep(150);
+  check(back.st.me.y < pos.y - 8, "حركته مقبولة بعد الرجوع");
+
+  // تبويب ثاني بنفس السر يأخذ المقعد والقديم ينسكر
+  const twin = new Client(url, "لاعب3");
+  await twin.connect();
+  twin.join(before.token);
+  await waitFor(() => twin.id !== null, 2000, "التبويب الثاني");
+  await sleep(300);
+  check(twin.id === before.id && back.closed, "التبويب الجديد أخذ المقعد والقديم انسكر");
+
+  // انقطاع بدون رجوع → يُطرد بعد المهلة، والجولة تنتهي لأن الباقي واحد ضد واحد
+  twin.close();
+  await sleep(C.RECONNECT_MS - 2000);
+  check(host.st.all.length === 3, "قبل انتهاء المهلة ما زال محفوظًا");
+  await waitFor(() => host.st.all.length === 2, 4000, "الطرد بعد المهلة");
+  check(host.st.all.length === 2, "بعد المهلة انطرد فعليًا");
+  await sleep(200);
+  check(host.st.ph === "over", `والجولة انتهت (${host.st.ph}) لأن العدد ما يكفي`);
+  for (const c of cs) c.close();
+}
+
+/* ONLY=reconnect node featuretest.js يشغّل قسمًا واحدًا */
+const TESTS = { sabotage: testSabotage, cone: testCone, reconnect: testReconnect };
 (async () => {
   const url = await startServer();
   try {
-    await testSabotage(url);
-    // جولة جديدة بسيرفر جديد عشان الحالة نظيفة (اللاعبون انقطعوا كلهم فرجع السيرفر للوبي)
-    await sleep(300);
-    await testCone(url);
+    const names = process.env.ONLY ? process.env.ONLY.split(",") : Object.keys(TESTS);
+    for (let i = 0; i < names.length; i++) {
+      // كل الأقسام على نفس السيرفر: لما ينقطع كل اللاعبين ويُطردون بعد المهلة يرجع للوبي
+      if (i) await sleep(C.RECONNECT_MS + 1500);
+      await TESTS[names[i]](url);
+    }
   } catch (e) {
     console.log("  ✗ استثناء:", e.message);
     fails++;

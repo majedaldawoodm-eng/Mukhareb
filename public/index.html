@@ -130,6 +130,14 @@
   <div id="voteList"></div>
 </div>
 
+<!-- إعادة الاتصال -->
+<div id="reconnect" class="overlay hidden" style="display:flex;align-items:center;justify-content:center;z-index:9">
+  <div class="center">
+    <h2 style="margin-bottom:10px">انقطع الاتصال</h2>
+    <p class="dim sm">أحاول أرجّعك لنفس الجولة. مقعدك محفوظ ٣٠ ثانية.</p>
+  </div>
+</div>
+
 <!-- النتيجة والنهاية -->
 <div id="result" class="overlay hidden" style="display:flex;align-items:center;justify-content:center">
   <div class="center" id="resultBody"></div>
@@ -147,26 +155,57 @@ let local = { x: S.SPAWN.x, y: S.SPAWN.y, face: -Math.PI/2, set: false };
 const stick = { on:false, id:null, bx:0, by:0, dx:0, dy:0 };
 let taskOpen = null;
 
-/* ============ الاتصال ============ */
+/* ============ الاتصال وإعادة الاتصال ============
+   السيرفر يعطينا سرًا (token) عند الدخول. لو انقطع الاتصال أو انسكرت الصفحة ورجعنا خلال
+   C.RECONNECT_MS نرسل نفس السر فنرجع لنفس الدور والمهام. السر محفوظ في localStorage. */
+const KEY = 'mukharrib:' + location.host;
+let saved = {};
+try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch {}
+let retryMs = 800, retryT = null, wanted = !!saved.token;
+
 function connect() {
+  clearTimeout(retryT);
   ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
-  ws.onopen = () => { $('conn').textContent = 'متصل بالسيرفر'; };
-  ws.onclose = () => { $('conn').textContent = 'انقطع الاتصال، أعد فتح الصفحة'; };
+  ws.onopen = () => {
+    retryMs = 800;
+    $('conn').textContent = 'متصل بالسيرفر';
+    if (saved.token) { $('conn').textContent = 'أرجّعك للجولة...'; send({ t:'join', name:saved.name, token:saved.token }); }
+  };
+  ws.onclose = () => {
+    $('conn').textContent = wanted ? 'انقطع الاتصال، أحاول أرجّع...' : 'انقطع الاتصال، أحاول أتصل...';
+    if (wanted) showReconnecting(true);
+    retryT = setTimeout(connect, retryMs);
+    retryMs = Math.min(5000, retryMs * 1.6);
+  };
   ws.onerror = () => { $('conn').textContent = 'ما قدرت أوصل للسيرفر'; };
   ws.onmessage = (e) => {
     const m = JSON.parse(e.data);
-    if (m.t === 'you') { myId = m.id; show('lobby'); }
-    else if (m.t === 'err') $('homeErr').textContent = m.m;
-    else if (m.t === 'kick') location.reload();
+    if (m.t === 'you') {
+      myId = m.id; wanted = true;
+      saved = { token: m.token, name: saved.name || $('name').value.trim() };
+      try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch {}
+      showReconnecting(false);
+      if (!m.back) show('lobby'); // الراجع تحدده أول رسالة حالة
+    }
+    else if (m.t === 'err') {
+      // سر قديم ما يصلح (انتهت المهلة أو السيرفر أعاد التشغيل والجولة شغالة): ارجع للرئيسية
+      if (saved.token) { forget(); showReconnecting(false); show('home'); }
+      $('homeErr').textContent = m.m;
+    }
+    else if (m.t === 'kick') { forget(); location.reload(); }
     else if (m.t === 's') onState(m);
   };
 }
+function forget() { saved = {}; wanted = false; try { localStorage.removeItem(KEY); } catch {} }
+function showReconnecting(on) { $('reconnect').classList.toggle('hidden', !on); }
 const send = (o) => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
+if (saved.name) $('name').value = saved.name;
 connect();
 
 $('joinBtn').onclick = () => {
   const n = $('name').value.trim();
   if (!n) { $('homeErr').textContent = 'اكتب اسمك'; return; }
+  saved = { name: n };
   send({ t:'join', name:n });
 };
 $('startBtn').onclick = () => send({ t:'start' });
@@ -212,7 +251,7 @@ function onState(m) {
 function renderLobby(m) {
   $('pcount').textContent = (m.all || []).length;
   $('plist').innerHTML = (m.all || []).map(p =>
-    `<span class="chip"><span class="dot" style="background:${p.c}"></span>${p.n}${p.b?' (بوت)':''}</span>`).join('');
+    `<span class="chip" style="${p.o?'opacity:.5':''}"><span class="dot" style="background:${p.c}"></span>${p.n}${p.b?' (بوت)':''}${p.o?' (منقطع)':''}</span>`).join('');
   $('hostBox').classList.toggle('hidden', !m.host);
   const need = C.MIN_PLAYERS - (m.all || []).length;
   $('startBtn').disabled = need > 0;
@@ -254,7 +293,7 @@ function renderMeeting(m) {
   $('meetLeft').textContent = m.left;
   const rows = (m.all||[]).filter(p => p.a).map(p =>
     `<button class="vrow ${me.vote===p.i?'on':''}" ${me.alive?'':'disabled'} onclick="send({t:'vote',id:${p.i}})">
-      <span class="dot" style="background:${p.c}"></span>${p.n}${p.i===myId?' (أنت)':''}</button>`).join('')
+      <span class="dot" style="background:${p.c}"></span>${p.n}${p.i===myId?' (أنت)':''}${p.o?' <span class="dim">(منقطع)</span>':''}</button>`).join('')
     + `<button class="vrow ${me.vote===-1?'on':''}" ${me.alive?'':'disabled'}
         style="justify-content:center;color:var(--dim)" onclick="send({t:'vote',id:-1})">ما أحد يطلع</button>`;
   if ($('voteList').innerHTML !== rows) $('voteList').innerHTML = rows;

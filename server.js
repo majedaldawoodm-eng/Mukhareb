@@ -76,7 +76,12 @@ function closeClient(c) {
   c.alive = false;
   clients.delete(c);
   try { c.socket.destroy(); } catch {}
-  if (c.pid != null) dropPlayer(c.pid);
+  if (c.pid != null) {
+    // ما نطرده فورًا: نحتفظ بمقعده ودوره ومهامه مدة RECONNECT_MS لعل اتصاله يرجع
+    const p = byId(c.pid);
+    if (p && p.conn === c) { p.conn = null; p.offlineSince = Date.now(); }
+    c.pid = null;
+  }
 }
 
 function decodeFrame(buf) {
@@ -179,6 +184,9 @@ function addPlayer(name, isBot) {
     name: (name || "لاعب").slice(0, 12),
     color: free.length ? free[0] : S.PALETTE[G.players.length % S.PALETTE.length],
     isBot: !!isBot,
+    token: isBot ? null : crypto.randomBytes(12).toString("hex"), // سر إعادة الاتصال
+    conn: null,          // العميل المتصل حاليًا، أو null لو منقطع
+    offlineSince: 0,
     x: S.SPAWN.x,
     y: S.SPAWN.y,
     alive: true,
@@ -202,6 +210,8 @@ function addPlayer(name, isBot) {
 }
 
 function dropPlayer(id) {
+  const p = byId(id);
+  if (p && p.conn) { p.conn.pid = null; send(p.conn, { t: "kick" }); }
   G.players = G.players.filter((p) => p.id !== id);
   if (G.hostId === id) {
     const h = G.players.find((p) => !p.isBot);
@@ -400,11 +410,23 @@ function botTick(b, dt, nowMs) {
 function handle(c, m) {
   if (m.t === "join") {
     if (c.pid != null) return;
+    // رجوع لاعب منقطع بنفس السر: يرجع لنفس المقعد والدور والمهام في أي مرحلة
+    if (typeof m.token === "string" && m.token) {
+      const p = G.players.find((x) => x.token === m.token);
+      if (p) {
+        if (p.conn && p.conn !== c) { p.conn.pid = null; closeClient(p.conn); } // تبويب ثاني يأخذ المقعد
+        p.conn = c; p.offlineSince = 0; p.lastMove = Date.now();
+        c.pid = p.id;
+        return send(c, { t: "you", id: p.id, token: p.token, back: true });
+      }
+      if (G.phase !== "lobby") return send(c, { t: "err", m: "انتهت مهلة الرجوع، انتظر لين تخلص الجولة" });
+    }
     if (G.phase !== "lobby") return send(c, { t: "err", m: "الجولة شغالة، انتظر لين تخلص" });
     const p = addPlayer(m.name, false);
     if (!p) return send(c, { t: "err", m: "الغرفة ممتلئة" });
+    p.conn = c;
     c.pid = p.id;
-    return send(c, { t: "you", id: p.id });
+    return send(c, { t: "you", id: p.id, token: p.token });
   }
   const me = c.pid != null ? byId(c.pid) : null;
   if (!me) return;
@@ -507,6 +529,10 @@ setInterval(() => {
   const dt = Math.min(0.2, (now - last) / 1000);
   last = now;
 
+  // اللي انقطع وما رجع خلال المهلة يُطرد فعليًا
+  for (const p of G.players.slice())
+    if (!p.isBot && !p.conn && p.offlineSince && now - p.offlineSince > C.RECONNECT_MS) dropPlayer(p.id);
+
   if (G.phase === "play") for (const b of G.players) if (b.isBot) botTick(b, dt, now);
   if (G.phase === "meeting" && now > G.meetEnd) resolveVotes();
   if (G.phase === "result" && now > G.meetEnd) {
@@ -543,7 +569,7 @@ setInterval(() => {
         .filter((p) => p.id !== me.id)
         .filter((p) => showAll || (p.alive && canSee(me, p.x, p.y, now)))
         .map((p) => ({ i: p.id, n: p.name, c: p.color, x: Math.round(p.x), y: Math.round(p.y), a: p.alive ? 1 : 0 })),
-      all: G.players.map((p) => ({ i: p.id, n: p.name, c: p.color, a: p.alive ? 1 : 0, b: p.isBot ? 1 : 0 })),
+      all: G.players.map((p) => ({ i: p.id, n: p.name, c: p.color, a: p.alive ? 1 : 0, b: p.isBot ? 1 : 0, o: !p.isBot && !p.conn ? 1 : 0 })),
       bd: G.bodies
         .filter((b) => showAll || canSee(me, b.x, b.y, now))
         .map((b) => ({ x: Math.round(b.x), y: Math.round(b.y), c: b.color, n: b.name })),
