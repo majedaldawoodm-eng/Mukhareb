@@ -1,0 +1,128 @@
+/* اختبار سيناريوهات الميزات بعملاء ويب سوكِت حقيقيين: قطع الكهرب، وغيرها لاحقًا.
+   تشغيل: node featuretest.js
+   كل تحقق يطبع ✓ أو ✗، وينتهي بكود 1 لو فشل أي تحقق. */
+"use strict";
+const S = require("./public/shared.js");
+const C = S.C;
+const { Client, pathR, startServer, stopServer, waitFor, sleep } = require("./longtest.js");
+
+let fails = 0;
+function check(ok, what) { console.log((ok ? "  ✓ " : "  ✗ ") + what); if (!ok) fails++; }
+const now = () => Date.now();
+
+/* يمشي العميل خطوة خطوة بمسار صحيح لين يقرب من نقطة، السيرفر يتحقق من كل خطوة */
+async function walkTo(c, x, y, within, timeoutMs = 40000) {
+  const t0 = now();
+  c.path = pathR(c.x, c.y, x, y);
+  let last = now();
+  while (Math.hypot(c.x - x, c.y - y) > within) {
+    if (now() - t0 > timeoutMs) throw new Error(`${c.name} ما وصل (${x},${y}) خلال المهلة`);
+    await sleep(50);
+    const t = now(), dt = Math.min(0.2, (t - last) / 1000); last = t;
+    if (!c.path.length) c.path = pathR(c.x, c.y, x, y);
+    if (!c.path.length) break;
+    const [wx, wy] = c.path[0];
+    const dx = wx - c.x, dy = wy - c.y, d = Math.hypot(dx, dy);
+    if (d < 8) { c.path.shift(); continue; }
+    const step = Math.min(d, C.SPEED * dt);
+    const nx = c.x + (dx / d) * step, ny = c.y + (dy / d) * step;
+    if (S.walkable(nx, ny, C.R)) { c.x = nx; c.y = ny; } else c.path.shift();
+    c.send({ t: "move", x: Math.round(c.x), y: Math.round(c.y) });
+  }
+}
+
+async function setup(url, n) {
+  const cs = [];
+  for (let i = 0; i < n; i++) cs.push(new Client(url, "لاعب" + (i + 1)));
+  for (const c of cs) await c.connect();
+  for (const c of cs) c.join();
+  await waitFor(() => cs.every((c) => c.id !== null && c.st), 3000, "الانضمام");
+  return cs;
+}
+
+async function testSabotage(url) {
+  console.log("\n▶ قطع الكهرب");
+  const cs = await setup(url, 3);
+  const host = cs[0];
+  await waitFor(() => host.st.host, 2000, "المضيف");
+  host.send({ t: "start" });
+  await waitFor(() => cs.every((c) => c.st.ph === "play"), 3000, "بداية الجولة");
+  // العملاء ما يتحرّكون تلقائيًا هنا (ما شغّلنا tick)، فنتحكم بكل خطوة
+  const imp = cs.find((c) => c.st.me.imp);
+  const crew = cs.filter((c) => !c.st.me.imp);
+  check(imp && crew.length === 2, "جولة بثلاثة: مخرِّب واحد وشابّين");
+  check(imp.st.me.scd > 0 && imp.st.me.scd <= C.SAB_FIRST / 1000, `كولداون التخريب يبدأ من ${imp.st.me.scd} ث`);
+  check(crew[0].st.me.scd === 0, "الشباب ما عندهم كولداون تخريب");
+
+  // تخريب قبل الجهوز → مرفوض
+  imp.send({ t: "sab" });
+  await sleep(300);
+  check(host.st.sab === 0, "التخريب قبل جهوز الكولداون مرفوض");
+  check(crew[0].st.me.vis === C.VIS_CREW && imp.st.me.vis === C.VIS_IMP, "الرؤية عادية قبل التخريب");
+
+  // شاب يمشي لأقرب مهمة له
+  const c0 = crew[0];
+  const spot = S.SPOTS.find((s) => s.id === c0.st.me.tasks[0]);
+  await walkTo(c0, spot.x, spot.y, C.USE_RANGE - 10);
+  await sleep(200);
+  const srvD = Math.hypot(c0.st.me.x - spot.x, c0.st.me.y - spot.y);
+  check(srvD < C.USE_RANGE, `الشاب وصل المهمة ${spot.name} (بُعده حسب السيرفر ${srvD.toFixed(0)})`);
+
+  // جهوز الكولداون ثم التخريب
+  await waitFor(() => imp.st.me.scd === 0, C.SAB_FIRST + 2000, "جهوز كولداون التخريب");
+  const killCdBefore = imp.st.me.cd;
+  imp.send({ t: "sab" });
+  await waitFor(() => host.st.sab > 0, 1000, "بداية الظلمة");
+  check(host.st.sab <= C.SAB_MS / 1000 && host.st.sab >= C.SAB_MS / 1000 - 1, `الظلمة بدأت بـ ${host.st.sab} ث`);
+  check(imp.st.me.scd >= (C.SAB_MS + C.SAB_CD) / 1000 - 1, `كولداون التخريب صار ${imp.st.me.scd} ث (مدة + كولداون)`);
+  check(Math.abs(imp.st.me.cd - killCdBefore) <= 1, "كولداون الطيحة ما تأثّر بالتخريب");
+  await sleep(200);
+  check(c0.st.me.vis === C.SAB_VIS_CREW, `رؤية الشاب ضاقت إلى ${c0.st.me.vis}`);
+  check(imp.st.me.vis === C.SAB_VIS_IMP, `رؤية المخرِّب ضاقت إلى ${imp.st.me.vis}`);
+
+  // تخريب ثاني أثناء الظلمة → مرفوض (الوقت ما يمتد)
+  const left1 = host.st.sab;
+  imp.send({ t: "sab" });
+  await sleep(300);
+  check(host.st.sab <= left1, "التخريب أثناء الظلمة ما يمدّها");
+
+  // المهمة وقت الظلمة مرفوضة
+  const dtBefore = host.st.dt;
+  c0.send({ t: "task", spot: spot.id });
+  await sleep(300);
+  check(host.st.dt === dtBefore && c0.st.me.done === 0, "إنهاء المهمة وقت الظلمة مرفوض من السيرفر");
+
+  // بعد انتهاء الظلمة كل شي يرجع
+  await waitFor(() => host.st.sab === 0, C.SAB_MS + 2000, "نهاية الظلمة");
+  await sleep(200);
+  check(c0.st.me.vis === C.VIS_CREW && imp.st.me.vis === C.VIS_IMP, "الرؤية رجعت طبيعية");
+  c0.send({ t: "task", spot: spot.id });
+  await sleep(300);
+  check(host.st.dt === dtBefore + 1 && c0.st.me.done === 1, "نفس المهمة تنجز بعد رجوع الكهرب");
+  check(imp.st.me.scd > 0 && imp.st.me.scd <= C.SAB_CD / 1000 + 1, `كولداون التخريب الباقي ${imp.st.me.scd} ث`);
+
+  // الاجتماع يرجّع الكهرب
+  await waitFor(() => imp.st.me.scd === 0, C.SAB_CD + 2000, "جهوز التخريب مرة ثانية");
+  imp.send({ t: "sab" });
+  await waitFor(() => host.st.sab > 0, 1000, "ظلمة ثانية");
+  const c1 = crew[1];
+  await walkTo(c1, S.EMERGENCY.x, S.EMERGENCY.y, C.USE_RANGE - 10);
+  c1.send({ t: "emergency" });
+  await waitFor(() => host.st.ph === "meeting", 1500, "الاجتماع الطارئ");
+  check(host.st.sab === 0, "الاجتماع يرجّع الكهرب");
+
+  for (const c of cs) c.close();
+}
+
+(async () => {
+  const url = await startServer();
+  try {
+    await testSabotage(url);
+  } catch (e) {
+    console.log("  ✗ استثناء:", e.message);
+    fails++;
+  }
+  stopServer();
+  console.log(fails ? `\n${fails} تحقق فشل` : "\nكل التحققات نجحت");
+  process.exit(fails ? 1 : 0);
+})();

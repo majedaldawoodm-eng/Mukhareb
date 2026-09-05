@@ -148,10 +148,21 @@ function freshLobby() {
     winner: null,
     note: "",
     hostId: null,
+    sabUntil: 0, // الكهرب مقطوع لين هذا الوقت
   };
 }
 
 const byId = (id) => G.players.find((p) => p.id === id);
+const blackout = (nowMs) => G.phase === "play" && G.sabUntil > nowMs;
+/* مدى الرؤية الفعلي للاعب الآن. السيرفر هو اللي يقرر، والمتصفح يرسم نفس الرقم */
+function visOf(p, nowMs) {
+  if (blackout(nowMs)) return p.imp ? C.SAB_VIS_IMP : C.SAB_VIS_CREW;
+  return p.imp ? C.VIS_IMP : C.VIS_CREW;
+}
+/* هل يشوف اللاعب p النقطة (x,y)؟ */
+function canSee(p, x, y, nowMs) {
+  return Math.hypot(x - p.x, y - p.y) < visOf(p, nowMs) && S.hasLOS(p.x, p.y, x, y);
+}
 const usedColors = () => G.players.map((p) => p.color);
 
 function addPlayer(name, isBot) {
@@ -169,6 +180,7 @@ function addPlayer(name, isBot) {
     done: 0,
     tasks: [],
     killReady: 0,
+    sabReady: 0,
     vote: null,
     suspect: null,
     lastMove: Date.now(),
@@ -218,7 +230,9 @@ function startGame() {
     p.suspect = null;
     p.tasks = shuffledSpots().slice(0, C.TASKS_PER).map((s) => s.id);
     p.killReady = Date.now() + C.FIRST_KILL;
+    p.sabReady = Date.now() + C.SAB_FIRST;
   });
+  G.sabUntil = 0;
   G.bodies = [];
   G.doneTasks = 0;
   G.totalTasks = G.players.filter((p) => !p.imp).length * C.TASKS_PER;
@@ -244,9 +258,12 @@ function doKill(killer, victim) {
   killer.x = victim.x;
   killer.y = victim.y;
   G.bodies.push({ x: victim.x, y: victim.y, name: victim.name, color: victim.color });
+  const nowMs = Date.now();
   for (const w of G.players) {
     if (!w.alive || w.imp || w.id === victim.id) continue;
-    if (Math.hypot(w.x - victim.x, w.y - victim.y) < 380 && S.hasLOS(w.x, w.y, victim.x, victim.y))
+    // الشاهد يشوف الطيحة من مدى أوسع من رؤيته العادية، إلا وقت الظلمة
+    const range = blackout(nowMs) ? C.SAB_VIS_CREW : 380;
+    if (Math.hypot(w.x - victim.x, w.y - victim.y) < range && S.hasLOS(w.x, w.y, victim.x, victim.y))
       w.suspect = killer.id;
   }
   checkWin();
@@ -256,6 +273,7 @@ function callMeeting(note) {
   if (G.phase !== "play") return;
   G.phase = "meeting";
   G.meetEnd = Date.now() + C.MEET_MS;
+  G.sabUntil = 0; // الاجتماع يرجّع الكهرب
   G.bodies = [];
   G.note = note;
   spawnAll();
@@ -300,6 +318,8 @@ function botTick(b, dt, nowMs) {
   if (!b.alive) return;
   if (b.workUntil > nowMs) return;
   if (b.workUntil && b.workUntil <= nowMs) {
+    // وقت الظلمة المهمة ما تنجز، البوت يوقف عند المعلم لين ترجع الكهرب
+    if (!b.imp && blackout(nowMs)) { b.workUntil = nowMs + 300; return; }
     if (!b.imp) { b.done++; G.doneTasks++; checkWin(); }
     b.workUntil = 0;
     b.goal = null;
@@ -310,9 +330,11 @@ function botTick(b, dt, nowMs) {
       .map((p) => ({ p, d: Math.hypot(p.x - b.x, p.y - b.y) }))
       .sort((a, c) => a.d - c.d)[0];
     if (prey) {
+      // الشاهد المحتمل لازم يكون قريب ويشوف الفريسة فعليًا (رؤيته أضيق وقت الظلمة)
+      const iso = Math.min(C.ISO, blackout(nowMs) ? C.SAB_VIS_CREW : C.ISO);
       const others = G.players.filter(
         (p) => p.alive && !p.imp && p.id !== prey.p.id &&
-          Math.hypot(p.x - prey.p.x, p.y - prey.p.y) < C.ISO &&
+          Math.hypot(p.x - prey.p.x, p.y - prey.p.y) < iso &&
           S.hasLOS(p.x, p.y, prey.p.x, prey.p.y)
       );
       if (prey.d < C.KILL_RANGE && nowMs > b.killReady && !others.length) {
@@ -413,8 +435,18 @@ function handle(c, m) {
       me.x = x; me.y = y;
       break;
     }
+    case "sab": {
+      // قطع الكهرب: للمخرِّب الحي، بكولداون مستقل، وما ينفع وهي مقطوعة أصلًا
+      if (G.phase !== "play" || !me.alive || !me.imp) break;
+      const nowMs = Date.now();
+      if (nowMs < me.sabReady || blackout(nowMs)) break;
+      G.sabUntil = nowMs + C.SAB_MS;
+      me.sabReady = nowMs + C.SAB_MS + C.SAB_CD;
+      break;
+    }
     case "task": {
       if (G.phase !== "play" || !me.alive || me.imp) break;
+      if (blackout(Date.now())) break; // ما فيه كهرب، ما فيه مهام
       const rem = me.tasks.slice(me.done);
       if (!rem.includes(m.spot)) break;
       const s = S.SPOTS.find((x) => x.id === m.spot);
@@ -473,7 +505,6 @@ setInterval(() => {
     if (c.pid == null) continue;
     const me = byId(c.pid);
     if (!me) { send(c, { t: "kick" }); c.pid = null; continue; }
-    const vis = me.imp ? C.VIS_IMP : C.VIS_CREW;
     const showAll = !me.alive || G.phase !== "play";
     send(c, {
       t: "s",
@@ -483,21 +514,24 @@ setInterval(() => {
       dt: G.doneTasks,
       tt: G.totalTasks,
       left: Math.max(0, Math.ceil((G.meetEnd - now) / 1000)),
+      sab: blackout(now) ? Math.ceil((G.sabUntil - now) / 1000) : 0, // ثواني الظلمة الباقية
       res: G.result,
       win: G.winner,
       imps: G.phase === "over" ? G.players.filter((p) => p.imp).map((p) => p.name) : null,
       me: {
         id: me.id, x: me.x, y: me.y, imp: me.imp, alive: me.alive,
         done: me.done, tasks: me.tasks, vote: me.vote,
+        vis: visOf(me, now),
         cd: Math.max(0, Math.ceil((me.killReady - now) / 1000)),
+        scd: me.imp ? Math.max(0, Math.ceil((me.sabReady - now) / 1000)) : 0,
       },
       ps: G.players
         .filter((p) => p.id !== me.id)
-        .filter((p) => showAll || (p.alive && Math.hypot(p.x - me.x, p.y - me.y) < vis && S.hasLOS(me.x, me.y, p.x, p.y)))
+        .filter((p) => showAll || (p.alive && canSee(me, p.x, p.y, now)))
         .map((p) => ({ i: p.id, n: p.name, c: p.color, x: Math.round(p.x), y: Math.round(p.y), a: p.alive ? 1 : 0 })),
       all: G.players.map((p) => ({ i: p.id, n: p.name, c: p.color, a: p.alive ? 1 : 0, b: p.isBot ? 1 : 0 })),
       bd: G.bodies
-        .filter((b) => showAll || (Math.hypot(b.x - me.x, b.y - me.y) < vis && S.hasLOS(me.x, me.y, b.x, b.y)))
+        .filter((b) => showAll || canSee(me, b.x, b.y, now))
         .map((b) => ({ x: Math.round(b.x), y: Math.round(b.y), c: b.color, n: b.name })),
     });
   }

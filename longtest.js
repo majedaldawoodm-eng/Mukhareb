@@ -26,6 +26,51 @@ const now = () => Date.now();
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const vlog = (...a) => VERBOSE && log(...a);
 
+/* ---------------- مسار يراعي نصف قطر اللاعب ----------------
+   S.findPath يرجّع خلايا تلامس الجدران (البوتات ما تتحقق من الجدران فما يفرق معها)،
+   لكن لاعب حقيقي نصف قطره C.R ما يقدر يوقف على ٢٣٪ من تلك الخلايا. هنا BFS على
+   الخلايا اللي يقدر جسم بنصف قطر C.R يوقف عليها فعليًا. */
+const RCELL = new Uint8Array(S.GW * S.GH);
+for (let cy = 0; cy < S.GH; cy++)
+  for (let cx = 0; cx < S.GW; cx++)
+    RCELL[cy * S.GW + cx] = S.walkable(cx * S.CELL + S.CELL / 2, cy * S.CELL + S.CELL / 2, C.R) ? 1 : 0;
+const rOk = (cx, cy) => cx >= 0 && cy >= 0 && cx < S.GW && cy < S.GH && RCELL[cy * S.GW + cx] === 1;
+function nearestR(x, y) {
+  const cx0 = Math.floor(x / S.CELL), cy0 = Math.floor(y / S.CELL);
+  for (let r = 0; r < 6; r++)
+    for (let dy = -r; dy <= r; dy++)
+      for (let dx = -r; dx <= r; dx++)
+        if (Math.max(Math.abs(dx), Math.abs(dy)) === r && rOk(cx0 + dx, cy0 + dy)) return [cx0 + dx, cy0 + dy];
+  return null;
+}
+function pathR(sx, sy, tx, ty) {
+  const s = nearestR(sx, sy), g = nearestR(tx, ty);
+  if (!s || !g) return [];
+  const W = S.GW, start = s[1] * W + s[0], goal = g[1] * W + g[0];
+  const prev = new Int32Array(W * S.GH).fill(-1), seen = new Uint8Array(W * S.GH);
+  const q = [start]; seen[start] = 1;
+  for (let h = 0; h < q.length; h++) {
+    const cur = q[h];
+    if (cur === goal) break;
+    const cx = cur % W, cy = (cur - cx) / W;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = cx + dx, ny = cy + dy;
+      if (!rOk(nx, ny)) continue;
+      const ni = ny * W + nx;
+      if (seen[ni]) continue;
+      seen[ni] = 1; prev[ni] = cur; q.push(ni);
+    }
+  }
+  if (!seen[goal]) return [];
+  const out = [];
+  for (let cur = goal; cur !== -1 && cur !== start; cur = prev[cur]) {
+    const cx = cur % W;
+    out.push([cx * S.CELL + S.CELL / 2, ((cur - cx) / W) * S.CELL + S.CELL / 2]);
+  }
+  out.push([s[0] * S.CELL + S.CELL / 2, s[1] * S.CELL + S.CELL / 2]);
+  return out.reverse();
+}
+
 /* ---------------- تشغيل السيرفر ---------------- */
 let child = null;
 function startServer() {
@@ -67,6 +112,8 @@ class Client {
     this.msgs = 0;
     this.errors = [];
     this.closed = false;
+    this.stallX = this.x;
+    this.stallY = this.y;
   }
   connect() {
     return new Promise((resolve, reject) => {
@@ -119,12 +166,12 @@ class Client {
       if (prey && me.cd <= 3) {
         if (!this.target || this.target.kind !== "hunt" || this.target.id !== prey.i || this.path.length < 2) {
           this.target = { kind: "hunt", id: prey.i };
-          this.path = S.findPath(this.x, this.y, prey.x, prey.y);
+          this.path = pathR(this.x, this.y, prey.x, prey.y);
         }
       } else if (!this.target || this.target.kind === "hunt" || !this.path.length) {
         const s = S.SPOTS[(Math.random() * S.SPOTS.length) | 0];
         this.target = { kind: "spot", x: s.x, y: s.y };
-        this.path = S.findPath(this.x, this.y, s.x, s.y);
+        this.path = pathR(this.x, this.y, s.x, s.y);
       }
     } else {
       const rem = me.tasks.slice(me.done);
@@ -139,7 +186,7 @@ class Client {
         const sid = rem.length ? rem[0] : S.SPOTS[(Math.random() * S.SPOTS.length) | 0].id;
         const s = S.SPOTS.find((x) => x.id === sid);
         this.target = { kind: "spot", x: s.x, y: s.y };
-        this.path = S.findPath(this.x, this.y, s.x, s.y);
+        this.path = pathR(this.x, this.y, s.x, s.y);
         if (!this.path.length) this.target = null;
       }
     }
@@ -190,7 +237,7 @@ function dumpState() {
   log("  اللاعبون:", (m.all || []).map((p) => `${p.n}${p.b ? "(بوت)" : ""}${p.a ? "" : "†"}`).join(", "));
   for (const c of clients)
     log(`  ${c.name}: id=${c.id} ph=${c.st && c.st.ph} alive=${c.st && c.st.me.alive} imp=${c.st && c.st.me.imp} ` +
-        `pos=(${Math.round(c.x)},${Math.round(c.y)}) msgs=${c.msgs} closed=${c.closed} errors=${c.errors.length ? c.errors.join("|") : "-"}`);
+        `pos=(${Math.round(c.x)},${Math.round(c.y)}) srv=(${c.st ? Math.round(c.st.me.x) : "?"},${c.st ? Math.round(c.st.me.y) : "?"}) msgs=${c.msgs} closed=${c.closed} errors=${c.errors.length ? c.errors.join("|") : "-"}`);
 }
 function cleanup() {
   for (const c of clients) c.close();
@@ -241,7 +288,14 @@ async function main() {
       lastPh = m.ph;
       const sig = `${m.ph}|${m.dt}|${m.all.filter((p) => p.a).length}|${m.left}`;
       if (sig !== lastSig) { lastSig = sig; lastChange = now(); }
-      if (now() - lastChange > STALL_MS) return fail(`الجولة ${r} متجمّدة ${STALL_MS / 1000} ثانية بدون تغيّر`);
+      if (now() - lastChange > STALL_MS) {
+        const moving = clients.filter((c) => c.st.me.alive && Math.hypot(c.st.me.x - c.stallX, c.st.me.y - c.stallY) > 40).length;
+        const aliveH = clients.filter((c) => c.st.me.alive).length;
+        return fail(`الجولة ${r} متجمّدة ${STALL_MS / 1000} ثانية بدون تغيّر في المرحلة/المهام/الأحياء. ` +
+          `اللاعبون الأحياء اللي تحرّكوا (حسب السيرفر) خلال الفترة: ${moving}/${aliveH}. ` +
+          (moving === 0 && aliveH ? "→ التجمّد من جهة العملاء (ما يرسلون حركة مقبولة)." : "→ العملاء يتحرّكون والجولة ما تنتهي: راجع منطق الفوز/البوتات في السيرفر."));
+      }
+      if (sig !== lastSig) for (const c of clients) { c.stallX = c.st.me.x; c.stallY = c.st.me.y; }
       if (now() - t0 > ROUND_TIMEOUT_MS) return fail(`الجولة ${r} تجاوزت ${ROUND_TIMEOUT_MS / 1000} ثانية`);
       if (clients.some((c) => c.closed)) return fail(`عميل انقطع أثناء الجولة ${r}`);
     }
@@ -270,6 +324,10 @@ async function main() {
   process.exit(0);
 }
 
-process.on("unhandledRejection", (e) => fail("unhandledRejection: " + (e && e.stack || e)));
-process.on("uncaughtException", (e) => fail("uncaughtException: " + (e && e.stack || e)));
-main().catch((e) => fail(e.stack || String(e)));
+module.exports = { Client, pathR, startServer, waitFor, sleep, stopServer: () => { done = true; if (child) child.kill(); } };
+
+if (require.main === module) {
+  process.on("unhandledRejection", (e) => fail("unhandledRejection: " + (e && e.stack || e)));
+  process.on("uncaughtException", (e) => fail("uncaughtException: " + (e && e.stack || e)));
+  main().catch((e) => fail(e.stack || String(e)));
+}

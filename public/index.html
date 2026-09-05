@@ -104,6 +104,10 @@
     <div id="bar"><div id="barfill"></div></div>
   </div>
   <div id="acts"></div>
+  <div id="sabBanner" class="hidden" style="position:fixed;top:84px;left:0;right:0;text-align:center;pointer-events:none">
+    <span style="display:inline-block;background:rgba(196,72,46,.9);color:#FFF3EE;padding:8px 16px;border-radius:99px;font-weight:900;font-size:16px">
+      الكهرب مقطوع <span id="sabLeft"></span></span>
+  </div>
   <div id="ghost" class="hidden" style="position:fixed;bottom:30px;left:20px;right:20px;
     text-align:center;color:var(--dim);font-size:15px">طحت. تتفرج بس، وتقدر تتحرك.</div>
 </div>
@@ -187,6 +191,10 @@ function onState(m) {
   $('place').textContent = S.placeName(local.x, local.y);
   $('barfill').style.width = (m.tt ? (m.dt / m.tt) * 100 : 0) + '%';
   $('ghost').classList.toggle('hidden', me.alive || m.ph !== 'play');
+  const dark = m.ph === 'play' && m.sab > 0;
+  $('sabBanner').classList.toggle('hidden', !dark);
+  if (dark) $('sabLeft').textContent = m.sab;
+  if (dark && taskOpen) closeTask(); // انقطعت الكهرب وأنت على المهمة
 
   $('meeting').classList.toggle('hidden', m.ph !== 'meeting');
   $('result').classList.toggle('hidden', m.ph !== 'result');
@@ -219,15 +227,21 @@ function renderActions(m) {
   const body = (m.bd||[]).find(b => Math.hypot(b.x-local.x, b.y-local.y) < C.REPORT_RANGE);
   const victim = me.imp ? (m.ps||[]).find(p => p.a && Math.hypot(p.x-local.x, p.y-local.y) < C.KILL_RANGE) : null;
   const emerg = Math.hypot(S.EMERGENCY.x-local.x, S.EMERGENCY.y-local.y) < C.USE_RANGE;
+  const dark = m.sab > 0;
   let h = '';
   if (me.imp && me.alive)
     h += `<button class="act" style="background:${victim&&!me.cd?'var(--ember)':'rgba(196,72,46,.25)'};color:#FFF3EE"
       ${victim && !me.cd ? '' : 'disabled'} onclick="doKill(${victim?victim.i:0})">${me.cd||'طيّح'}</button>`;
+  if (me.imp && me.alive) {
+    const ready = !me.scd && !dark;
+    h += `<button class="act" style="background:${ready?'#3B3A6E':'rgba(59,58,110,.3)'};color:#EDE6D6;font-size:14px"
+      ${ready ? '' : 'disabled'} onclick="send({t:'sab'})">${dark ? 'مقطوع' : (me.scd || 'اقطع<br>الكهرب')}</button>`;
+  }
   if (body && me.alive)
     h += `<button class="act" style="background:var(--sand)" onclick="send({t:'report'})">بلّغ</button>`;
   if (emerg && me.alive)
     h += `<button class="act" style="background:var(--ember);color:#FFF3EE;font-size:15px" onclick="send({t:'emergency'})">اجتماع</button>`;
-  if (spot && !me.imp && me.alive)
+  if (spot && !me.imp && me.alive && !dark)
     h += `<button class="act" style="background:var(--palm)" onclick="openTask('${spot.id}')">استخدم</button>`;
   if (acts.innerHTML !== h) acts.innerHTML = h;
 }
@@ -466,10 +480,12 @@ function draw() {
 
   /* الظلمة */
   if (me && me.alive && st.ph === 'play') {
-    const v = (me.imp ? C.VIS_IMP : C.VIS_CREW) * scale;
+    // نفس المدى اللي يستخدمه السيرفر للفلترة، عشان ما ترسم شي ما وصلك أو تحجب شي وصلك
+    const v = (me.vis || (me.imp ? C.VIS_IMP : C.VIS_CREW)) * scale;
     const g = ctx.createRadialGradient(w/2, h/2, v * .55, w/2, h/2, v);
     g.addColorStop(0, 'rgba(20,18,14,0)'); g.addColorStop(1, 'rgba(20,18,14,.96)');
     ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    if (st.sab > 0) { ctx.fillStyle = 'rgba(30,20,50,.35)'; ctx.fillRect(0, 0, w, h); }
   }
 
   /* العصا */
