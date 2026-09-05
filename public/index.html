@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>مخرِّب الرياض</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap');
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0}
+  :root{
+    --bg:#14120E; --surf:#221E17; --surf2:#2E2920; --line:#3E3729;
+    --sand:#E8B33C; --ember:#C4482E; --palm:#7FA05A; --text:#EDE6D6; --dim:#9A9080;
+  }
+  html,body{height:100%;overflow:hidden}
+  body{background:var(--bg);color:var(--text);
+    font-family:'Tajawal','SF Arabic','Noto Sans Arabic',system-ui,sans-serif}
+  button{font-family:inherit;cursor:pointer;border:none}
+  button:active{transform:scale(.97)}
+  .screen{position:fixed;inset:0;overflow-y:auto;padding:24px 20px calc(34px + env(safe-area-inset-bottom));
+    max-width:540px;margin:0 auto}
+  .hidden{display:none!important}
+  .btn{display:block;width:100%;border-radius:14px;padding:15px;font-size:17px;font-weight:700;
+    background:var(--sand);color:#171B12;margin-bottom:10px}
+  .btn.big{padding:19px;font-size:20px}
+  .btn.dark{background:var(--surf2);color:var(--text)}
+  .btn.ember{background:var(--ember);color:#FFF3EE}
+  .btn.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
+  .btn:disabled{opacity:.4}
+  .card{background:var(--surf);border:1px solid var(--line);border-radius:18px;padding:16px;margin-bottom:14px}
+  input{width:100%;background:var(--surf2);border:1px solid var(--line);border-radius:12px;
+    padding:14px 16px;color:var(--text);font-size:17px;font-family:inherit;margin-bottom:12px}
+  h1{font-size:44px;font-weight:900;line-height:1.05;letter-spacing:-1px}
+  h2{font-size:26px;font-weight:900}
+  .dim{color:var(--dim)}
+  .sm{font-size:15px;line-height:1.8}
+  #cv{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+  #hud{position:fixed;top:0;left:0;right:0;padding:14px 16px;pointer-events:none;
+    background:linear-gradient(180deg,rgba(20,18,14,.92),transparent)}
+  #bar{height:7px;background:var(--surf2);border-radius:99px;overflow:hidden;margin-top:8px}
+  #barfill{height:100%;background:var(--palm);width:0;border-radius:99px;transition:width .3s}
+  #acts{position:fixed;bottom:calc(26px + env(safe-area-inset-bottom));left:20px;display:grid;gap:12px}
+  .act{width:86px;height:86px;border-radius:50%;font-size:17px;font-weight:900;color:#171B12}
+  .overlay{position:fixed;inset:0;background:rgba(20,18,14,.97);padding:26px 20px;overflow-y:auto;z-index:5}
+  .chip{display:inline-flex;align-items:center;gap:8px;background:var(--surf2);
+    padding:9px 14px;border-radius:99px;font-size:15px;font-weight:700;margin:0 0 8px 8px}
+  .dot{width:14px;height:14px;border-radius:5px;flex:0 0 auto}
+  .vrow{display:flex;align-items:center;gap:12px;background:var(--surf);border:1px solid var(--line);
+    border-radius:14px;padding:15px 18px;font-size:17px;font-weight:700;color:var(--text);width:100%;margin-bottom:9px}
+  .vrow.on{background:var(--ember);border-color:var(--ember)}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+  .cup{aspect-ratio:1;border-radius:14px;border:2px solid var(--line);background:var(--surf);
+    color:var(--text);font-size:30px;font-weight:700}
+  .cup.ok{border-color:var(--palm);color:var(--palm);background:rgba(127,160,90,.16)}
+  .food{padding:16px 8px;border-radius:14px;border:2px solid var(--line);background:var(--surf);
+    color:var(--text);font-size:16px;font-weight:700}
+  .center{text-align:center}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<!-- الرئيسية -->
+<div id="home" class="screen">
+  <div style="padding-top:36px;margin-bottom:30px">
+    <div style="font-size:13px;color:var(--sand);font-weight:500;margin-bottom:10px">لعبة على الوايفاي</div>
+    <h1>مخرِّب<br><span style="color:var(--sand)">الرياض</span></h1>
+    <p class="dim sm" style="margin-top:14px">
+      تتفرقون على أحياء الرياض وتخلصون مهامكم. واحد فيكم مخرِّب يتصيّد اللي ينعزل.
+    </p>
+  </div>
+  <div class="card">
+    <input id="name" placeholder="اسمك" maxlength="12">
+    <button class="btn big" id="joinBtn">ادخل اللعبة</button>
+  </div>
+  <p id="homeErr" class="center sm" style="color:var(--ember)"></p>
+  <p id="conn" class="center sm dim"></p>
+</div>
+
+<!-- اللوبي -->
+<div id="lobby" class="screen hidden">
+  <h2 style="margin:8px 0 6px">غرفة الانتظار</h2>
+  <p class="dim sm" style="margin-bottom:20px">
+    باقي الشباب يفتحون نفس الرابط من جوالاتهم على نفس الوايفاي.
+  </p>
+  <div class="card">
+    <p class="dim sm" style="margin-bottom:12px">اللاعبين (<span id="pcount">0</span>)</p>
+    <div id="plist"></div>
+  </div>
+  <div id="hostBox" class="hidden">
+    <button class="btn dark" id="botsBtn">ضيف بوتات تكمّل العدد</button>
+    <button class="btn big" id="startBtn">ابدأ الجولة</button>
+  </div>
+  <p id="waitMsg" class="center sm dim"></p>
+</div>
+
+<!-- اللعب -->
+<div id="game" class="hidden">
+  <canvas id="cv"></canvas>
+  <div id="hud">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <span id="role" style="font-size:15px;font-weight:700"></span>
+      <span id="place" class="sm dim"></span>
+    </div>
+    <div id="bar"><div id="barfill"></div></div>
+  </div>
+  <div id="acts"></div>
+  <div id="ghost" class="hidden" style="position:fixed;bottom:30px;left:20px;right:20px;
+    text-align:center;color:var(--dim);font-size:15px">طحت. تتفرج بس، وتقدر تتحرك.</div>
+</div>
+
+<!-- المهمة -->
+<div id="task" class="overlay hidden">
+  <h2 id="taskTitle" style="margin:4px 0 6px"></h2>
+  <p id="taskWhere" class="dim sm" style="margin-bottom:20px"></p>
+  <div id="taskBody"></div>
+  <button class="btn ghost" style="margin-top:14px" onclick="closeTask()">رجوع</button>
+</div>
+
+<!-- الاجتماع -->
+<div id="meeting" class="overlay hidden">
+  <div class="center" style="margin-bottom:18px">
+    <h2 style="color:var(--sand);margin-bottom:6px">اجتماع</h2>
+    <p id="meetNote" class="dim sm"></p>
+    <p id="meetLeft" style="font-size:34px;font-weight:900;margin-top:6px"></p>
+  </div>
+  <div id="voteList"></div>
+</div>
+
+<!-- النتيجة والنهاية -->
+<div id="result" class="overlay hidden" style="display:flex;align-items:center;justify-content:center">
+  <div class="center" id="resultBody"></div>
+</div>
+<div id="over" class="overlay hidden" style="display:flex;align-items:center;justify-content:center">
+  <div class="center" style="width:100%;max-width:340px" id="overBody"></div>
+</div>
+
+<script src="shared.js"></script>
+<script>
+const S = window.SHARED, C = S.C;
+const $ = (id) => document.getElementById(id);
+let ws = null, myId = null, st = null, me = null;
+let local = { x: S.SPAWN.x, y: S.SPAWN.y, set: false };
+const stick = { on:false, id:null, bx:0, by:0, dx:0, dy:0 };
+let taskOpen = null;
+
+/* ============ الاتصال ============ */
+function connect() {
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+  ws.onopen = () => { $('conn').textContent = 'متصل بالسيرفر'; };
+  ws.onclose = () => { $('conn').textContent = 'انقطع الاتصال، أعد فتح الصفحة'; };
+  ws.onerror = () => { $('conn').textContent = 'ما قدرت أوصل للسيرفر'; };
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.t === 'you') { myId = m.id; show('lobby'); }
+    else if (m.t === 'err') $('homeErr').textContent = m.m;
+    else if (m.t === 'kick') location.reload();
+    else if (m.t === 's') onState(m);
+  };
+}
+const send = (o) => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
+connect();
+
+$('joinBtn').onclick = () => {
+  const n = $('name').value.trim();
+  if (!n) { $('homeErr').textContent = 'اكتب اسمك'; return; }
+  send({ t:'join', name:n });
+};
+$('startBtn').onclick = () => send({ t:'start' });
+$('botsBtn').onclick = () => send({ t:'bots', n:3 });
+
+function show(which) {
+  for (const s of ['home','lobby','game']) $(s).classList.toggle('hidden', s !== which);
+}
+
+/* ============ استقبال الحالة ============ */
+function onState(m) {
+  const prev = st;
+  st = m; me = m.me;
+  if (!local.set || !prev || prev.ph !== m.ph) { local.x = me.x; local.y = me.y; local.set = true; }
+  if (Math.hypot(local.x - me.x, local.y - me.y) > 70) { local.x = me.x; local.y = me.y; }
+
+  if (m.ph === 'lobby') { show('lobby'); renderLobby(m); return; }
+  show('game');
+
+  $('role').textContent = me.imp ? 'المخرِّب' : 'من الشباب';
+  $('role').style.color = me.imp ? 'var(--ember)' : 'var(--palm)';
+  $('place').textContent = S.placeName(local.x, local.y);
+  $('barfill').style.width = (m.tt ? (m.dt / m.tt) * 100 : 0) + '%';
+  $('ghost').classList.toggle('hidden', me.alive || m.ph !== 'play');
+
+  $('meeting').classList.toggle('hidden', m.ph !== 'meeting');
+  $('result').classList.toggle('hidden', m.ph !== 'result');
+  $('over').classList.toggle('hidden', m.ph !== 'over');
+  if (m.ph !== 'play' && taskOpen) closeTask();
+
+  if (m.ph === 'meeting') renderMeeting(m);
+  if (m.ph === 'result') renderResult(m);
+  if (m.ph === 'over') renderOver(m);
+  if (m.ph === 'play') renderActions(m);
+  else $('acts').innerHTML = '';
+}
+
+function renderLobby(m) {
+  $('pcount').textContent = (m.all || []).length;
+  $('plist').innerHTML = (m.all || []).map(p =>
+    `<span class="chip"><span class="dot" style="background:${p.c}"></span>${p.n}${p.b?' (بوت)':''}</span>`).join('');
+  $('hostBox').classList.toggle('hidden', !m.host);
+  const need = C.MIN_PLAYERS - (m.all || []).length;
+  $('startBtn').disabled = need > 0;
+  $('startBtn').textContent = need > 0 ? `ناقص ${need}` : 'ابدأ الجولة';
+  $('waitMsg').textContent = m.host ? '' : 'بانتظار صاحب الغرفة يبدأ';
+}
+
+/* ============ الأزرار ============ */
+function renderActions(m) {
+  const acts = $('acts');
+  const rem = me.tasks.slice(me.done);
+  const spot = S.SPOTS.find(s => rem.includes(s.id) && Math.hypot(s.x-local.x, s.y-local.y) < C.USE_RANGE);
+  const body = (m.bd||[]).find(b => Math.hypot(b.x-local.x, b.y-local.y) < C.REPORT_RANGE);
+  const victim = me.imp ? (m.ps||[]).find(p => p.a && Math.hypot(p.x-local.x, p.y-local.y) < C.KILL_RANGE) : null;
+  const emerg = Math.hypot(S.EMERGENCY.x-local.x, S.EMERGENCY.y-local.y) < C.USE_RANGE;
+  let h = '';
+  if (me.imp && me.alive)
+    h += `<button class="act" style="background:${victim&&!me.cd?'var(--ember)':'rgba(196,72,46,.25)'};color:#FFF3EE"
+      ${victim && !me.cd ? '' : 'disabled'} onclick="doKill(${victim?victim.i:0})">${me.cd||'طيّح'}</button>`;
+  if (body && me.alive)
+    h += `<button class="act" style="background:var(--sand)" onclick="send({t:'report'})">بلّغ</button>`;
+  if (emerg && me.alive)
+    h += `<button class="act" style="background:var(--ember);color:#FFF3EE;font-size:15px" onclick="send({t:'emergency'})">اجتماع</button>`;
+  if (spot && !me.imp && me.alive)
+    h += `<button class="act" style="background:var(--palm)" onclick="openTask('${spot.id}')">استخدم</button>`;
+  if (acts.innerHTML !== h) acts.innerHTML = h;
+}
+function doKill(id) { if (id) send({ t:'kill', id }); }
+
+/* ============ الاجتماع ============ */
+function renderMeeting(m) {
+  $('meetNote').textContent = m.note || '';
+  $('meetLeft').textContent = m.left;
+  const rows = (m.all||[]).filter(p => p.a).map(p =>
+    `<button class="vrow ${me.vote===p.i?'on':''}" ${me.alive?'':'disabled'} onclick="send({t:'vote',id:${p.i}})">
+      <span class="dot" style="background:${p.c}"></span>${p.n}${p.i===myId?' (أنت)':''}</button>`).join('')
+    + `<button class="vrow ${me.vote===-1?'on':''}" ${me.alive?'':'disabled'}
+        style="justify-content:center;color:var(--dim)" onclick="send({t:'vote',id:-1})">ما أحد يطلع</button>`;
+  if ($('voteList').innerHTML !== rows) $('voteList').innerHTML = rows;
+}
+function renderResult(m) {
+  const r = m.res;
+  $('resultBody').innerHTML = r && r.name
+    ? `<p style="font-size:27px;font-weight:900;margin-bottom:10px">طلع ${r.name}</p>
+       <p style="font-size:19px;font-weight:700;color:${r.wasImp?'var(--palm)':'var(--ember)'}">
+       ${r.wasImp?'وكان هو المخرِّب':'وما كان المخرِّب'}</p>`
+    : `<p style="font-size:24px;font-weight:900">ما طلع أحد</p>`;
+}
+function renderOver(m) {
+  const crew = m.win === 'crew';
+  $('overBody').innerHTML =
+    `<h1 style="font-size:38px;color:${crew?'var(--palm)':'var(--ember)'};margin-bottom:12px">
+      ${crew?'الشباب فازوا':'المخرِّب فاز'}</h1>
+     <p class="dim sm" style="margin-bottom:26px">المخرِّب كان
+       <b style="color:var(--text)">${(m.imps||[]).join(' و ')}</b></p>
+     ${m.host?'<button class="btn big" id="againBtn">جولة ثانية</button>'
+              :'<p class="dim sm">بانتظار صاحب الغرفة</p>'}`;
+  const ab = document.getElementById('againBtn');
+  if (ab) ab.onclick = () => send({ t:'again' });
+}
+
+/* ============ المهام ============ */
+const FOODS = ['برجر','شاورما','بروست','فطاير','عصير','كنافة'];
+function openTask(id) {
+  const s = S.SPOTS.find(x => x.id === id);
+  taskOpen = s;
+  $('taskTitle').textContent = s.label;
+  $('taskWhere').textContent = s.name;
+  $('task').classList.remove('hidden');
+  ({ tea:gTea, coal:gCoal, cups:gCups, order:gOrder })[s.game]($('taskBody'), () => {
+    send({ t:'task', spot:id });
+    closeTask();
+  });
+}
+function closeTask() { taskOpen = null; $('task').classList.add('hidden'); $('taskBody').innerHTML = ''; }
+
+function gTea(el, done) {
+  el.innerHTML = `<p class="dim sm center" style="margin-bottom:18px">اضغط مطوّل، وارفع إصبعك لما يوصل للخط</p>
+    <div style="width:130px;height:190px;margin:0 auto 20px;border:3px solid var(--line);border-top:none;
+      border-radius:8px 8px 40px 40px;position:relative;overflow:hidden;background:var(--surf)">
+      <div id="lvl" style="position:absolute;bottom:0;left:0;right:0;height:0;
+        background:linear-gradient(180deg,#C97B26,#8E4A12)"></div>
+      <div style="position:absolute;bottom:68%;left:0;right:0;height:18%;
+        border-top:2px dashed var(--palm);border-bottom:2px dashed var(--palm)"></div>
+    </div>
+    <button class="btn big" id="pour">صبّ</button><p id="msg" class="center sm"></p>`;
+  let v = 0, holding = false;
+  const t = setInterval(() => { if (!holding) return; v = Math.min(101, v + 1.9);
+    $('lvl').style.height = v + '%'; if (v > 100) { holding = false; $('msg').textContent = 'طفح'; $('msg').style.color='var(--ember)'; v = 0; setTimeout(()=>{$('lvl').style.height='0%';$('msg').textContent='';},600);} }, 30);
+  const up = () => { if (!holding) return; holding = false;
+    if (v >= 68 && v <= 86) { clearInterval(t); done(); }
+    else { $('msg').textContent = 'ما وصل للخط'; $('msg').style.color='var(--ember)'; v = 0; $('lvl').style.height='0%'; } };
+  $('pour').onpointerdown = () => { holding = true; $('msg').textContent=''; };
+  $('pour').onpointerup = up; $('pour').onpointerleave = up;
+  el._stop = () => clearInterval(t);
+}
+function gCoal(el, done) {
+  el.innerHTML = `<p class="dim sm center" style="margin-bottom:10px">دقّ على الفحم بسرعة لين يحمرّ</p>
+    <p class="center" id="sec" style="color:var(--sand);font-weight:700;margin-bottom:14px"></p>
+    <div style="background:var(--surf2);border-radius:99px;height:14px;overflow:hidden;margin-bottom:22px">
+      <div id="heat" style="height:100%;width:0;background:var(--ember);border-radius:99px"></div></div>
+    <button id="coal" style="width:190px;height:190px;border-radius:50%;border:3px solid var(--line);
+      display:block;margin:0 auto;background:var(--surf);color:var(--text);font-size:22px;font-weight:700">الفحم</button>`;
+  let h = 0, left = 8;
+  const d = setInterval(() => { h = Math.max(0, h - 1.6); $('heat').style.width = h + '%'; }, 100);
+  const s = setInterval(() => { left--; $('sec').textContent = left + ' ثانية';
+    if (left <= 0) { clearInterval(d); clearInterval(s); h = 0; left = 8; $('heat').style.width='0%'; setTimeout(()=>gCoal(el,done),400); } }, 1000);
+  $('sec').textContent = left + ' ثانية';
+  $('coal').onpointerdown = () => { h += 9.5; $('heat').style.width = Math.min(100,h) + '%';
+    if (h >= 100) { clearInterval(d); clearInterval(s); done(); } };
+  el._stop = () => { clearInterval(d); clearInterval(s); };
+}
+function gCups(el, done) {
+  const order = [1,2,3,4,5,6].sort(() => Math.random() - .5);
+  el.innerHTML = `<p class="dim sm center" style="margin-bottom:20px">رصّها بالترتيب من ١ إلى ٦</p>
+    <div class="grid3">${order.map(n => `<button class="cup" data-n="${n}">${n}</button>`).join('')}</div>`;
+  let next = 1;
+  el.querySelectorAll('.cup').forEach(b => b.onclick = () => {
+    const n = +b.dataset.n;
+    if (n === next) { b.classList.add('ok'); next++; if (next === 7) done(); }
+    else { el.querySelectorAll('.cup').forEach(x => x.style.borderColor = 'var(--ember)');
+           setTimeout(() => gCups(el, done), 450); }
+  });
+}
+function gOrder(el, done) {
+  const seq = FOODS.slice().sort(() => Math.random() - .5).slice(0, 4);
+  el.innerHTML = `<p id="hint" class="dim sm center" style="margin-bottom:14px">احفظ الطلب</p>
+    <div id="seq" class="center" style="min-height:56px;margin-bottom:18px"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      ${FOODS.map(f => `<button class="food" data-f="${f}">${f}</button>`).join('')}</div>`;
+  const paint = (showing, idx) => {
+    $('seq').innerHTML = seq.map((f,i) => showing
+      ? `<span class="chip" style="background:var(--sand);color:#171B12">${f}</span>`
+      : `<span class="chip" style="background:${i<idx?'var(--palm)':'var(--surf2)'};color:${i<idx?'#12160F':'var(--surf2)'}">${i<idx?f:'؟'}</span>`).join('');
+  };
+  paint(true, 0);
+  let showing = true, idx = 0;
+  const t = setTimeout(() => { showing = false; $('hint').textContent = 'اطلبه بنفس الترتيب'; paint(false, 0); }, 3800);
+  el.querySelectorAll('.food').forEach(b => b.onclick = () => {
+    if (showing) return;
+    if (b.dataset.f === seq[idx]) { idx++; paint(false, idx); if (idx === seq.length) { clearTimeout(t); done(); } }
+    else { clearTimeout(t); gOrder(el, done); }
+  });
+  el._stop = () => clearTimeout(t);
+}
+
+/* ============ الرسم ============ */
+const cv = $('cv'), ctx = cv.getContext('2d');
+function resize() {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  cv.width = innerWidth * dpr; cv.height = innerHeight * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+addEventListener('resize', resize); resize();
+
+cv.addEventListener('pointerdown', e => {
+  stick.on = true; stick.id = e.pointerId; stick.bx = e.clientX; stick.by = e.clientY; stick.dx = 0; stick.dy = 0;
+});
+cv.addEventListener('pointermove', e => {
+  if (!stick.on || stick.id !== e.pointerId) return;
+  stick.dx = e.clientX - stick.bx; stick.dy = e.clientY - stick.by;
+});
+const stickUp = e => { if (stick.id === e.pointerId) { stick.on = false; stick.dx = stick.dy = 0; } };
+cv.addEventListener('pointerup', stickUp);
+cv.addEventListener('pointercancel', stickUp);
+
+let lastT = performance.now(), sendAcc = 0;
+function frame(t) {
+  const dt = Math.min(.05, (t - lastT) / 1000); lastT = t;
+  requestAnimationFrame(frame);
+  if (!st || st.ph === 'lobby') return;
+
+  if (st.ph === 'play' && stick.on && (stick.dx || stick.dy)) {
+    const mag = Math.min(1, Math.hypot(stick.dx, stick.dy) / 55);
+    const a = Math.atan2(stick.dy, stick.dx);
+    const vx = Math.cos(a) * C.SPEED * mag * dt, vy = Math.sin(a) * C.SPEED * mag * dt;
+    if (S.walkable(local.x + vx, local.y, C.R)) local.x += vx;
+    if (S.walkable(local.x, local.y + vy, C.R)) local.y += vy;
+  }
+  sendAcc += dt;
+  if (sendAcc > .05 && st.ph === 'play') { sendAcc = 0; send({ t:'move', x:Math.round(local.x), y:Math.round(local.y) }); }
+
+  draw();
+}
+requestAnimationFrame(frame);
+
+function draw() {
+  const w = innerWidth, h = innerHeight;
+  const scale = Math.min(w / 460, h / 820);
+  ctx.fillStyle = '#14120E'; ctx.fillRect(0, 0, w, h);
+  ctx.save();
+  ctx.translate(w/2, h/2); ctx.scale(scale, scale); ctx.translate(-local.x, -local.y);
+
+  /* وادي حنيفة */
+  ctx.beginPath();
+  S.WADI.forEach(([x,y],i) => i ? ctx.lineTo(x,y) : ctx.moveTo(x,y));
+  ctx.closePath(); ctx.fillStyle = '#1B2418'; ctx.fill();
+
+  /* الطرق */
+  for (const r of S.ROADS) {
+    ctx.fillStyle = '#332D24'; ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = '#5C5342'; ctx.lineWidth = 2; ctx.setLineDash([22, 26]);
+    ctx.beginPath();
+    if (r.v) { ctx.moveTo(r.x + r.w/2, r.y); ctx.lineTo(r.x + r.w/2, r.y + r.h); }
+    else { ctx.moveTo(r.x, r.y + r.h/2); ctx.lineTo(r.x + r.w, r.y + r.h/2); }
+    ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  /* الأحياء بشبكة شوارع داخلية */
+  for (const d of S.DISTRICTS) {
+    ctx.fillStyle = '#251F17'; ctx.fillRect(d.x, d.y, d.w, d.h);
+    ctx.save(); ctx.beginPath(); ctx.rect(d.x, d.y, d.w, d.h); ctx.clip();
+    ctx.strokeStyle = '#2F2819'; ctx.lineWidth = 1.5; ctx.beginPath();
+    for (let x = d.x + 55; x < d.x + d.w; x += 55) { ctx.moveTo(x, d.y); ctx.lineTo(x, d.y + d.h); }
+    for (let y = d.y + 55; y < d.y + d.h; y += 55) { ctx.moveTo(d.x, y); ctx.lineTo(d.x + d.w, y); }
+    ctx.stroke(); ctx.restore();
+    ctx.strokeStyle = '#3E3729'; ctx.lineWidth = 3; ctx.strokeRect(d.x, d.y, d.w, d.h);
+    ctx.font = '700 20px Tajawal, sans-serif'; ctx.textAlign = 'center';
+    ctx.fillStyle = '#5A5142'; ctx.fillText(d.name, d.x + d.w/2, d.y + 34);
+  }
+
+  /* المهام */
+  const rem = me ? me.tasks.slice(me.done) : [];
+  for (const s of S.SPOTS) {
+    const mine = rem.includes(s.id) && me && !me.imp;
+    ctx.beginPath(); ctx.arc(s.x, s.y, 18, 0, 7);
+    ctx.fillStyle = mine ? 'rgba(232,179,60,.92)' : 'rgba(90,82,66,.5)'; ctx.fill();
+    if (mine) { ctx.beginPath(); ctx.arc(s.x, s.y, 29, 0, 7);
+      ctx.strokeStyle = 'rgba(232,179,60,.4)'; ctx.lineWidth = 3; ctx.stroke(); }
+    ctx.font = '600 14px Tajawal, sans-serif'; ctx.textAlign = 'center';
+    ctx.fillStyle = mine ? '#E8B33C' : '#6A6152'; ctx.fillText(s.name, s.x, s.y + 42);
+  }
+  ctx.beginPath(); ctx.arc(S.EMERGENCY.x, S.EMERGENCY.y, 20, 0, 7);
+  ctx.fillStyle = '#C4482E'; ctx.fill();
+
+  /* الجثث */
+  for (const b of (st.bd || [])) {
+    ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(1.1);
+    ctx.fillStyle = b.c; ctx.beginPath(); ctx.ellipse(0,0,21,11,0,0,7); ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.beginPath(); ctx.ellipse(7,0,7,7,0,0,7); ctx.fill();
+    ctx.restore();
+  }
+
+  const guy = (x, y, color, name, ghost) => {
+    ctx.globalAlpha = ghost ? .4 : 1;
+    ctx.beginPath(); ctx.ellipse(x, y + 17, 14, 5, 0, 0, 7); ctx.fillStyle = 'rgba(0,0,0,.4)'; ctx.fill();
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x - 14, y - 18, 28, 35, 13); else ctx.rect(x - 14, y - 18, 28, 35);
+    ctx.fillStyle = color; ctx.fill();
+    ctx.beginPath(); ctx.ellipse(x + 4, y - 5, 9, 7, 0, 0, 7); ctx.fillStyle = '#BFE3F0'; ctx.fill();
+    ctx.globalAlpha = 1;
+    if (name) { ctx.font = '600 14px Tajawal, sans-serif'; ctx.textAlign = 'center';
+      ctx.fillStyle = '#EDE6D6'; ctx.fillText(name, x, y - 28); }
+  };
+  for (const p of (st.ps || [])) guy(p.x, p.y, p.c, p.n, !p.a);
+  const mine = (st.all || []).find(p => p.i === myId);
+  guy(local.x, local.y, mine ? mine.c : '#E8B33C', null, me && !me.alive);
+
+  ctx.restore();
+
+  /* الظلمة */
+  if (me && me.alive && st.ph === 'play') {
+    const v = (me.imp ? C.VIS_IMP : C.VIS_CREW) * scale;
+    const g = ctx.createRadialGradient(w/2, h/2, v * .55, w/2, h/2, v);
+    g.addColorStop(0, 'rgba(20,18,14,0)'); g.addColorStop(1, 'rgba(20,18,14,.96)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+  }
+
+  /* العصا */
+  if (stick.on) {
+    ctx.beginPath(); ctx.arc(stick.bx, stick.by, 52, 0, 7);
+    ctx.fillStyle = 'rgba(237,230,214,.08)'; ctx.fill();
+    const mag = Math.min(52, Math.hypot(stick.dx, stick.dy)), a = Math.atan2(stick.dy, stick.dx);
+    ctx.beginPath(); ctx.arc(stick.bx + Math.cos(a)*mag, stick.by + Math.sin(a)*mag, 24, 0, 7);
+    ctx.fillStyle = 'rgba(237,230,214,.3)'; ctx.fill();
+  }
+}
+</script>
+</body>
+</html>
