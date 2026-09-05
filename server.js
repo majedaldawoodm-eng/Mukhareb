@@ -1,4 +1,6 @@
-/* مخرِّب الرياض — سيرفر محلي على الوايفاي. تشغيل: node server.js */
+/* مخرِّب الرياض — سيرفر محلي على الوايفاي. تشغيل: node server.js
+   هذا الملف للاتصال فقط: ملفات ثابتة، ويب سوكِت من الصفر، الانضمام وإعادة الاتصال، والبث.
+   قواعد اللعبة والبوتات كلها في game.js. */
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -6,6 +8,7 @@ const os = require("os");
 const crypto = require("crypto");
 const S = require("./public/shared.js");
 const C = S.C;
+const { createGame } = require("./game.js");
 
 const PORT = process.env.PORT || 3000;
 const PUB = path.join(__dirname, "public");
@@ -78,7 +81,7 @@ function closeClient(c) {
   try { c.socket.destroy(); } catch {}
   if (c.pid != null) {
     // ما نطرده فورًا: نحتفظ بمقعده ودوره ومهامه مدة RECONNECT_MS لعل اتصاله يرجع
-    const p = byId(c.pid);
+    const p = game.byId(c.pid);
     if (p && p.conn === c) { p.conn = null; p.offlineSince = Date.now(); }
     c.pid = null;
   }
@@ -137,282 +140,20 @@ function send(c, obj) {
   try { c.socket.write(encodeFrame(JSON.stringify(obj))); } catch { closeClient(c); }
 }
 
-/* ---------------- حالة اللعبة ---------------- */
-let G = freshLobby();
-let nextId = 1;
-
-function freshLobby() {
-  return {
-    phase: "lobby",
-    players: [],
-    bodies: [],
-    doneTasks: 0,
-    totalTasks: 0,
-    meetEnd: 0,
-    result: null,
-    winner: null,
-    note: "",
-    hostId: null,
-    sabUntil: 0, // الكهرب مقطوع لين هذا الوقت
-  };
-}
-
-const byId = (id) => G.players.find((p) => p.id === id);
-const blackout = (nowMs) => G.phase === "play" && G.sabUntil > nowMs;
-/* مدى الرؤية الفعلي للاعب الآن. السيرفر هو اللي يقرر، والمتصفح يرسم نفس الرقم */
-function visOf(p, nowMs) {
-  if (blackout(nowMs)) return p.imp ? C.SAB_VIS_IMP : C.SAB_VIS_CREW;
-  return p.imp ? C.VIS_IMP : C.VIS_CREW;
-}
-/* هل يشوف اللاعب p النقطة (x,y)؟ مخروط باتجاه مشيه + دائرة صغيرة حوله، والجدران تحجب */
-function canSee(p, x, y, nowMs) {
-  const vis = visOf(p, nowMs);
-  return S.inCone(p.x, p.y, p.face, x, y, vis, Math.min(C.VIS_NEAR, vis)) && S.hasLOS(p.x, p.y, x, y);
-}
-/* حدّث اتجاه اللاعب من حركته */
-function face(p, nx, ny) {
-  const dx = nx - p.x, dy = ny - p.y;
-  if (Math.hypot(dx, dy) > 0.5) p.face = Math.atan2(dy, dx);
-}
-const usedColors = () => G.players.map((p) => p.color);
-
-function addPlayer(name, isBot) {
-  if (G.players.length >= C.MAX_PLAYERS) return null;
-  const free = S.PALETTE.filter((c) => !usedColors().includes(c));
-  const p = {
-    id: nextId++,
-    name: (name || "لاعب").slice(0, 12),
-    color: free.length ? free[0] : S.PALETTE[G.players.length % S.PALETTE.length],
-    isBot: !!isBot,
-    token: isBot ? null : crypto.randomBytes(12).toString("hex"), // سر إعادة الاتصال
-    conn: null,          // العميل المتصل حاليًا، أو null لو منقطع
-    offlineSince: 0,
-    x: S.SPAWN.x,
-    y: S.SPAWN.y,
-    alive: true,
-    imp: false,
-    done: 0,
-    tasks: [],
-    killReady: 0,
-    sabReady: 0,
-    face: -Math.PI / 2, // اتجاه المشي، يبدأ لفوق
-    vote: null,
-    suspect: null,
-    lastMove: Date.now(),
-    path: [],
-    goal: null,
-    workUntil: 0,
-    nextPath: 0,
-  };
-  G.players.push(p);
-  if (G.hostId === null && !isBot) G.hostId = p.id;
-  return p;
-}
-
-function dropPlayer(id) {
-  const p = byId(id);
-  if (p && p.conn) { p.conn.pid = null; send(p.conn, { t: "kick" }); }
-  G.players = G.players.filter((p) => p.id !== id);
-  if (G.hostId === id) {
-    const h = G.players.find((p) => !p.isBot);
-    G.hostId = h ? h.id : null;
-  }
-  if (G.phase !== "lobby" && G.players.filter((p) => !p.isBot).length === 0) G = freshLobby();
-  else if (G.phase !== "lobby" && G.phase !== "over") checkWin();
-}
-
-function spawnAll() {
-  G.players.forEach((p, i) => {
-    const a = (i / G.players.length) * Math.PI * 2;
-    p.x = S.SPAWN.x + Math.cos(a) * 60;
-    p.y = S.SPAWN.y + Math.sin(a) * 60;
-    p.face = a + Math.PI; // يواجه وسط الميدان
-    p.path = [];
-    p.goal = null;
-    p.vote = null;
-    p.workUntil = 0;
-    p.lastMove = Date.now();
-  });
-}
-
-function startGame() {
-  if (G.players.length < C.MIN_PLAYERS) return;
-  const impCount = G.players.length >= 7 ? 2 : 1;
-  const ids = G.players.map((p) => p.id).sort(() => Math.random() - 0.5);
-  const imps = ids.slice(0, impCount);
-  const shuffledSpots = () => S.SPOTS.slice().sort(() => Math.random() - 0.5);
-  G.players.forEach((p) => {
-    p.imp = imps.includes(p.id);
-    p.alive = true;
-    p.done = 0;
-    p.suspect = null;
-    p.tasks = shuffledSpots().slice(0, C.TASKS_PER).map((s) => s.id);
-    p.killReady = Date.now() + C.FIRST_KILL;
-    p.sabReady = Date.now() + C.SAB_FIRST;
-  });
-  G.sabUntil = 0;
-  G.bodies = [];
-  G.doneTasks = 0;
-  G.totalTasks = G.players.filter((p) => !p.imp).length * C.TASKS_PER;
-  G.winner = null;
-  G.result = null;
-  G.note = "";
-  G.phase = "play";
-  spawnAll();
-}
-
-function checkWin() {
-  const ai = G.players.filter((p) => p.alive && p.imp).length;
-  const ac = G.players.filter((p) => p.alive && !p.imp).length;
-  if (G.totalTasks > 0 && G.doneTasks >= G.totalTasks) G.winner = "crew";
-  else if (ai === 0) G.winner = "crew";
-  else if (ai >= ac) G.winner = "imp";
-  if (G.winner) G.phase = "over";
-}
-
-function doKill(killer, victim) {
-  victim.alive = false;
-  killer.killReady = Date.now() + C.KILL_CD;
-  killer.x = victim.x;
-  killer.y = victim.y;
-  G.bodies.push({ x: victim.x, y: victim.y, name: victim.name, color: victim.color });
-  const nowMs = Date.now();
-  for (const w of G.players) {
-    if (!w.alive || w.imp || w.id === victim.id) continue;
-    // الشاهد يشوف الطيحة من مدى أوسع من رؤيته العادية، إلا وقت الظلمة
-    const range = blackout(nowMs) ? C.SAB_VIS_CREW : 380;
-    if (Math.hypot(w.x - victim.x, w.y - victim.y) < range && S.hasLOS(w.x, w.y, victim.x, victim.y))
-      w.suspect = killer.id;
-  }
-  checkWin();
-}
-
-function callMeeting(note) {
-  if (G.phase !== "play") return;
-  G.phase = "meeting";
-  G.meetEnd = Date.now() + C.MEET_MS;
-  G.sabUntil = 0; // الاجتماع يرجّع الكهرب
-  G.bodies = [];
-  G.note = note;
-  spawnAll();
-}
-
-function resolveVotes() {
-  const alive = G.players.filter((p) => p.alive);
-  for (const p of alive) {
-    if (!p.isBot || p.vote !== null) continue;
-    if (p.suspect !== null && byId(p.suspect) && byId(p.suspect).alive && Math.random() < 0.85) {
-      p.vote = p.suspect;
-    } else if (p.imp) {
-      const t = alive.filter((x) => !x.imp);
-      p.vote = t.length ? t[(Math.random() * t.length) | 0].id : -1;
-    } else {
-      const t = alive.filter((x) => x.id !== p.id);
-      p.vote = Math.random() < 0.3 || !t.length ? -1 : t[(Math.random() * t.length) | 0].id;
-    }
-  }
-  const tally = {};
-  alive.forEach((p) => {
-    if (p.vote !== null) tally[p.vote] = (tally[p.vote] || 0) + 1;
-  });
-  let top = null, topN = 0, tie = false;
-  for (const [k, n] of Object.entries(tally)) {
-    if (n > topN) { top = Number(k); topN = n; tie = false; }
-    else if (n === topN) tie = true;
-  }
-  if (top !== null && top >= 0 && !tie) {
-    const out = byId(top);
-    if (out) { out.alive = false; G.result = { name: out.name, wasImp: out.imp }; }
-    else G.result = { name: null, wasImp: false };
-  } else G.result = { name: null, wasImp: false };
-  G.players.forEach((p) => { p.vote = null; p.suspect = null; });
-  G.phase = "result";
-  G.meetEnd = Date.now() + C.RESULT_MS;
-  checkWin();
-}
-
-/* ---------------- ذكاء البوتات ---------------- */
-function botTick(b, dt, nowMs) {
-  if (!b.alive) return;
-  if (b.workUntil > nowMs) return;
-  if (b.workUntil && b.workUntil <= nowMs) {
-    // وقت الظلمة المهمة ما تنجز، البوت يوقف عند المعلم لين ترجع الكهرب
-    if (!b.imp && blackout(nowMs)) { b.workUntil = nowMs + 300; return; }
-    if (!b.imp) { b.done++; G.doneTasks++; checkWin(); }
-    b.workUntil = 0;
-    b.goal = null;
-  }
-  if (b.imp) {
-    const prey = G.players
-      .filter((p) => p.alive && !p.imp)
-      .map((p) => ({ p, d: Math.hypot(p.x - b.x, p.y - b.y) }))
-      .sort((a, c) => a.d - c.d)[0];
-    if (prey) {
-      // الشاهد المحتمل لازم يكون قريب ويشوف الفريسة فعليًا (رؤيته أضيق وقت الظلمة)
-      const iso = Math.min(C.ISO, blackout(nowMs) ? C.SAB_VIS_CREW : C.ISO);
-      const others = G.players.filter(
-        (p) => p.alive && !p.imp && p.id !== prey.p.id &&
-          Math.hypot(p.x - prey.p.x, p.y - prey.p.y) < iso &&
-          S.hasLOS(p.x, p.y, prey.p.x, prey.p.y)
-      );
-      if (prey.d < C.KILL_RANGE && nowMs > b.killReady && !others.length) {
-        doKill(b, prey.p);
-        b.goal = null; b.path = [];
-        return;
-      }
-      if (nowMs > b.killReady - C.HUNT_LEAD && !others.length && prey.d < 800) {
-        if (!b.goal || b.goal.kind !== "hunt" || b.goal.id !== prey.p.id) {
-          b.goal = { kind: "hunt", id: prey.p.id };
-          b.path = S.findPath(b.x, b.y, prey.p.x, prey.p.y);
-          b.nextPath = nowMs + C.REPATH_MS;
-        } else if (b.path.length < 2 && nowMs > b.nextPath) {
-          b.path = S.findPath(b.x, b.y, prey.p.x, prey.p.y);
-          b.nextPath = nowMs + C.REPATH_MS;
-        }
-      } else if (!b.goal || b.goal.kind === "hunt") {
-        const s = S.SPOTS[(Math.random() * S.SPOTS.length) | 0];
-        b.goal = { kind: "spot", x: s.x, y: s.y };
-        b.path = S.findPath(b.x, b.y, s.x, s.y);
-      }
-    }
-  } else {
-    const body = G.bodies.find(
-      (bd) => Math.hypot(bd.x - b.x, bd.y - b.y) < C.REPORT_RANGE && S.hasLOS(b.x, b.y, bd.x, bd.y)
-    );
-    if (body) { callMeeting(`${b.name} بلّغ عن ${body.name}`); return; }
-    if (!b.goal) {
-      const rem = b.tasks.slice(b.done);
-      const sid = rem.length ? rem[0] : S.SPOTS[(Math.random() * S.SPOTS.length) | 0].id;
-      const s = S.SPOTS.find((x) => x.id === sid);
-      b.goal = { kind: "spot", x: s.x, y: s.y };
-      b.path = S.findPath(b.x, b.y, s.x, s.y);
-    }
-  }
-  if (b.path && b.path.length) {
-    const [wx, wy] = b.path[0];
-    const dx = wx - b.x, dy = wy - b.y, d = Math.hypot(dx, dy);
-    if (d < 9) b.path.shift();
-    else {
-      const nx = b.x + (dx / d) * C.BOT_SPEED * dt, ny = b.y + (dy / d) * C.BOT_SPEED * dt;
-      face(b, nx, ny);
-      b.x = nx; b.y = ny;
-    }
-  } else if (b.goal && b.goal.kind === "spot") {
-    if (Math.hypot(b.goal.x - b.x, b.goal.y - b.y) < 45) b.workUntil = nowMs + C.WORK_MS;
-    else {
-      b.path = S.findPath(b.x, b.y, b.goal.x, b.goal.y);
-      if (!b.path.length) b.goal = null;
-    }
-  }
-}
+/* ---------------- اللعبة ---------------- */
+const game = createGame({
+  now: Date.now,
+  onKick: (p) => { const c = p.conn; p.conn = null; c.pid = null; send(c, { t: "kick" }); },
+});
 
 /* ---------------- رسائل اللاعبين ---------------- */
 function handle(c, m) {
+  const G = game.state;
   if (m.t === "join") {
     if (c.pid != null) return;
     // رجوع لاعب منقطع بنفس السر: يرجع لنفس المقعد والدور والمهام في أي مرحلة
     if (typeof m.token === "string" && m.token) {
-      const p = G.players.find((x) => x.token === m.token);
+      const p = game.findByToken(m.token);
       if (p) {
         if (p.conn && p.conn !== c) { p.conn.pid = null; closeClient(p.conn); } // تبويب ثاني يأخذ المقعد
         p.conn = c; p.offlineSince = 0; p.lastMove = Date.now();
@@ -422,104 +163,15 @@ function handle(c, m) {
       if (G.phase !== "lobby") return send(c, { t: "err", m: "انتهت مهلة الرجوع، انتظر لين تخلص الجولة" });
     }
     if (G.phase !== "lobby") return send(c, { t: "err", m: "الجولة شغالة، انتظر لين تخلص" });
-    const p = addPlayer(m.name, false);
+    const p = game.addPlayer(m.name, false);
     if (!p) return send(c, { t: "err", m: "الغرفة ممتلئة" });
     p.conn = c;
     c.pid = p.id;
     return send(c, { t: "you", id: p.id, token: p.token });
   }
-  const me = c.pid != null ? byId(c.pid) : null;
+  const me = c.pid != null ? game.byId(c.pid) : null;
   if (!me) return;
-
-  switch (m.t) {
-    case "start":
-      if (me.id === G.hostId && G.phase === "lobby") startGame();
-      break;
-    case "bots":
-      if (me.id === G.hostId && G.phase === "lobby") {
-        const names = ["فهد", "سلطان", "عبدالله", "ناصر", "تركي", "بدر", "مشعل"];
-        const n = Math.max(1, Math.min(6, m.n | 0));
-        for (let i = 0; i < n; i++) {
-          const used = G.players.map((p) => p.name);
-          const nm = names.find((x) => !used.includes(x)) || "بوت";
-          if (!addPlayer(nm, true)) break;
-        }
-      }
-      break;
-    case "again":
-      if (me.id === G.hostId && G.phase === "over") {
-        G.phase = "lobby";
-        G.players = G.players.filter((p) => true);
-        G.bodies = [];
-        G.winner = null;
-        G.result = null;
-      }
-      break;
-    case "move": {
-      if (G.phase !== "play") break;
-      const now = Date.now();
-      const dt = Math.min(0.4, (now - me.lastMove) / 1000);
-      me.lastMove = now;
-      const x = +m.x, y = +m.y;
-      if (!isFinite(x) || !isFinite(y)) break;
-      const maxD = C.SPEED * dt * 1.8 + 6;
-      const d = Math.hypot(x - me.x, y - me.y);
-      if (d > maxD) break;
-      if (!S.walkable(x, y, C.R)) break;
-      face(me, x, y);
-      me.x = x; me.y = y;
-      break;
-    }
-    case "sab": {
-      // قطع الكهرب: للمخرِّب الحي، بكولداون مستقل، وما ينفع وهي مقطوعة أصلًا
-      if (G.phase !== "play" || !me.alive || !me.imp) break;
-      const nowMs = Date.now();
-      if (nowMs < me.sabReady || blackout(nowMs)) break;
-      G.sabUntil = nowMs + C.SAB_MS;
-      me.sabReady = nowMs + C.SAB_MS + C.SAB_CD;
-      break;
-    }
-    case "task": {
-      if (G.phase !== "play" || !me.alive || me.imp) break;
-      if (blackout(Date.now())) break; // ما فيه كهرب، ما فيه مهام
-      const rem = me.tasks.slice(me.done);
-      if (!rem.includes(m.spot)) break;
-      const s = S.SPOTS.find((x) => x.id === m.spot);
-      if (!s || Math.hypot(s.x - me.x, s.y - me.y) > C.USE_RANGE + 25) break;
-      me.done++;
-      G.doneTasks++;
-      checkWin();
-      break;
-    }
-    case "kill": {
-      if (G.phase !== "play" || !me.alive || !me.imp) break;
-      if (Date.now() < me.killReady) break;
-      const v = byId(m.id);
-      if (!v || !v.alive || v.imp) break;
-      if (Math.hypot(v.x - me.x, v.y - me.y) > C.KILL_RANGE + 15) break;
-      doKill(me, v);
-      break;
-    }
-    case "report": {
-      if (G.phase !== "play" || !me.alive) break;
-      const b = G.bodies.find((bd) => Math.hypot(bd.x - me.x, bd.y - me.y) < C.REPORT_RANGE + 20);
-      if (b) callMeeting(`${me.name} بلّغ عن ${b.name}`);
-      break;
-    }
-    case "emergency": {
-      if (G.phase !== "play" || !me.alive) break;
-      if (Math.hypot(S.EMERGENCY.x - me.x, S.EMERGENCY.y - me.y) < C.USE_RANGE + 25)
-        callMeeting(`${me.name} فتح اجتماع طارئ`);
-      break;
-    }
-    case "vote": {
-      if (G.phase !== "meeting" || !me.alive) break;
-      me.vote = m.id;
-      const alive = G.players.filter((p) => p.alive && !p.isBot);
-      if (alive.every((p) => p.vote !== null)) G.meetEnd = Math.min(G.meetEnd, Date.now() + 3000);
-      break;
-    }
-  }
+  game.handle(me, m);
 }
 
 /* ---------------- الحلقة والبث ---------------- */
@@ -529,51 +181,13 @@ setInterval(() => {
   const dt = Math.min(0.2, (now - last) / 1000);
   last = now;
 
-  // اللي انقطع وما رجع خلال المهلة يُطرد فعليًا
-  for (const p of G.players.slice())
-    if (!p.isBot && !p.conn && p.offlineSince && now - p.offlineSince > C.RECONNECT_MS) dropPlayer(p.id);
-
-  if (G.phase === "play") for (const b of G.players) if (b.isBot) botTick(b, dt, now);
-  if (G.phase === "meeting" && now > G.meetEnd) resolveVotes();
-  if (G.phase === "result" && now > G.meetEnd) {
-    if (G.winner) G.phase = "over";
-    else { G.phase = "play"; G.result = null; }
-  }
+  game.tick(now, dt);
 
   for (const c of clients) {
     if (c.pid == null) continue;
-    const me = byId(c.pid);
+    const me = game.byId(c.pid);
     if (!me) { send(c, { t: "kick" }); c.pid = null; continue; }
-    const showAll = !me.alive || G.phase !== "play";
-    send(c, {
-      t: "s",
-      ph: G.phase,
-      host: G.hostId === me.id,
-      note: G.note,
-      dt: G.doneTasks,
-      tt: G.totalTasks,
-      left: Math.max(0, Math.ceil((G.meetEnd - now) / 1000)),
-      sab: blackout(now) ? Math.ceil((G.sabUntil - now) / 1000) : 0, // ثواني الظلمة الباقية
-      res: G.result,
-      win: G.winner,
-      imps: G.phase === "over" ? G.players.filter((p) => p.imp).map((p) => p.name) : null,
-      me: {
-        id: me.id, x: me.x, y: me.y, imp: me.imp, alive: me.alive,
-        done: me.done, tasks: me.tasks, vote: me.vote,
-        vis: visOf(me, now),
-        face: +me.face.toFixed(3),
-        cd: Math.max(0, Math.ceil((me.killReady - now) / 1000)),
-        scd: me.imp ? Math.max(0, Math.ceil((me.sabReady - now) / 1000)) : 0,
-      },
-      ps: G.players
-        .filter((p) => p.id !== me.id)
-        .filter((p) => showAll || (p.alive && canSee(me, p.x, p.y, now)))
-        .map((p) => ({ i: p.id, n: p.name, c: p.color, x: Math.round(p.x), y: Math.round(p.y), a: p.alive ? 1 : 0 })),
-      all: G.players.map((p) => ({ i: p.id, n: p.name, c: p.color, a: p.alive ? 1 : 0, b: p.isBot ? 1 : 0, o: !p.isBot && !p.conn ? 1 : 0 })),
-      bd: G.bodies
-        .filter((b) => showAll || canSee(me, b.x, b.y, now))
-        .map((b) => ({ x: Math.round(b.x), y: Math.round(b.y), c: b.color, n: b.name })),
-    });
+    send(c, game.snapshotFor(me, now));
   }
 }, C.TICK);
 
