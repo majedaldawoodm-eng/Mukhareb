@@ -223,7 +223,8 @@ function createGame(opts = {}) {
     if (b.workUntil && b.workUntil <= nowMs) {
       // وقت الظلمة المهمة ما تنجز، البوت يوقف عند المعلم لين ترجع الكهرب
       if (!b.imp && blackout(nowMs)) { b.workUntil = nowMs + 300; return; }
-      if (!b.imp) { b.done++; G.doneTasks++; checkWin(); }
+      // البوت اللي خلّص مهامه يستمر يتحرك بين المعالم كغطاء، لكن ما يزيد العدّاد
+      if (!b.imp && b.done < b.tasks.length) { b.done++; G.doneTasks++; checkWin(); }
       b.workUntil = 0;
       b.goal = null;
     }
@@ -384,7 +385,11 @@ function createGame(opts = {}) {
     for (const p of G.players.slice())
       if (!p.isBot && !p.conn && p.offlineSince && nowMs - p.offlineSince > C.RECONNECT_MS) dropPlayer(p.id);
 
-    if (G.phase === "play") for (const b of G.players) if (b.isBot) botTick(b, dt, nowMs);
+    // لو انتهت الجولة في منتصف الحلقة ما نكمّل باقي البوتات (كان يظهر 26/25 في العدّاد)
+    for (const b of G.players) {
+      if (G.phase !== "play") break;
+      if (b.isBot) botTick(b, dt, nowMs);
+    }
     if (G.phase === "meeting" && nowMs > G.meetEnd) resolveVotes();
     if (G.phase === "result" && nowMs > G.meetEnd) {
       if (G.winner) G.phase = "over";
