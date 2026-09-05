@@ -1,0 +1,13 @@
+# نشر بضغطة على Render (استضافة مجانية). من لوحة Render: New ثم Blueprint ثم اختر هذا الريبو.
+# السيرفر يقرأ PORT من البيئة ويخدم HTTP والويب سوكِت على نفس المنفذ، فما يحتاج أي إعداد آخر.
+services:
+  - type: web
+    name: mukharrib
+    runtime: node
+    plan: free
+    branch: claude/claude-rc-p94npp
+    buildCommand: ""
+    startCommand: node server.js
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
