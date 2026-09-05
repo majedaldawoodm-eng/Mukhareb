@@ -159,9 +159,15 @@ function visOf(p, nowMs) {
   if (blackout(nowMs)) return p.imp ? C.SAB_VIS_IMP : C.SAB_VIS_CREW;
   return p.imp ? C.VIS_IMP : C.VIS_CREW;
 }
-/* هل يشوف اللاعب p النقطة (x,y)؟ */
+/* هل يشوف اللاعب p النقطة (x,y)؟ مخروط باتجاه مشيه + دائرة صغيرة حوله، والجدران تحجب */
 function canSee(p, x, y, nowMs) {
-  return Math.hypot(x - p.x, y - p.y) < visOf(p, nowMs) && S.hasLOS(p.x, p.y, x, y);
+  const vis = visOf(p, nowMs);
+  return S.inCone(p.x, p.y, p.face, x, y, vis, Math.min(C.VIS_NEAR, vis)) && S.hasLOS(p.x, p.y, x, y);
+}
+/* حدّث اتجاه اللاعب من حركته */
+function face(p, nx, ny) {
+  const dx = nx - p.x, dy = ny - p.y;
+  if (Math.hypot(dx, dy) > 0.5) p.face = Math.atan2(dy, dx);
 }
 const usedColors = () => G.players.map((p) => p.color);
 
@@ -181,6 +187,7 @@ function addPlayer(name, isBot) {
     tasks: [],
     killReady: 0,
     sabReady: 0,
+    face: -Math.PI / 2, // اتجاه المشي، يبدأ لفوق
     vote: null,
     suspect: null,
     lastMove: Date.now(),
@@ -209,6 +216,7 @@ function spawnAll() {
     const a = (i / G.players.length) * Math.PI * 2;
     p.x = S.SPAWN.x + Math.cos(a) * 60;
     p.y = S.SPAWN.y + Math.sin(a) * 60;
+    p.face = a + Math.PI; // يواجه وسط الميدان
     p.path = [];
     p.goal = null;
     p.vote = null;
@@ -374,7 +382,11 @@ function botTick(b, dt, nowMs) {
     const [wx, wy] = b.path[0];
     const dx = wx - b.x, dy = wy - b.y, d = Math.hypot(dx, dy);
     if (d < 9) b.path.shift();
-    else { b.x += (dx / d) * C.BOT_SPEED * dt; b.y += (dy / d) * C.BOT_SPEED * dt; }
+    else {
+      const nx = b.x + (dx / d) * C.BOT_SPEED * dt, ny = b.y + (dy / d) * C.BOT_SPEED * dt;
+      face(b, nx, ny);
+      b.x = nx; b.y = ny;
+    }
   } else if (b.goal && b.goal.kind === "spot") {
     if (Math.hypot(b.goal.x - b.x, b.goal.y - b.y) < 45) b.workUntil = nowMs + C.WORK_MS;
     else {
@@ -432,6 +444,7 @@ function handle(c, m) {
       const d = Math.hypot(x - me.x, y - me.y);
       if (d > maxD) break;
       if (!S.walkable(x, y, C.R)) break;
+      face(me, x, y);
       me.x = x; me.y = y;
       break;
     }
@@ -522,6 +535,7 @@ setInterval(() => {
         id: me.id, x: me.x, y: me.y, imp: me.imp, alive: me.alive,
         done: me.done, tasks: me.tasks, vote: me.vote,
         vis: visOf(me, now),
+        face: +me.face.toFixed(3),
         cd: Math.max(0, Math.ceil((me.killReady - now) / 1000)),
         scd: me.imp ? Math.max(0, Math.ceil((me.sabReady - now) / 1000)) : 0,
       },

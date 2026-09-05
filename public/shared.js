@@ -199,7 +199,21 @@
     SAB_FIRST: 20000,     // أول ما يجهز بعد بداية الجولة
     SAB_VIS_CREW: 120,    // رؤية الشباب وقت الظلمة
     SAB_VIS_IMP: 260,     // رؤية المخرِّب وقت الظلمة
+    /* مخروط الرؤية: المدى الكامل باتجاه المشي فقط، ودائرة صغيرة حول اللاعب من كل الجهات.
+       البوتات ما تعتمد على الرؤية أصلًا فالمعايرة ما تتأثر */
+    VIS_NEAR: 110,        // نصف قطر الدائرة الصغيرة
+    VIS_HALF: 1.25,       // نصف زاوية المخروط بالراديان (≈ ١٤٣° كاملة)
   };
+
+  /* هل النقطة (x,y) داخل رؤية لاعب واقف في (px,py) متجه بزاوية face؟ بدون حساب الجدران */
+  function inCone(px, py, face, x, y, vis, near) {
+    const d = Math.hypot(x - px, y - py);
+    if (d < near) return true;
+    if (d >= vis) return false;
+    let a = Math.atan2(y - py, x - px) - face;
+    a = Math.atan2(Math.sin(a), Math.cos(a)); // إلى [-π, π]
+    return Math.abs(a) <= C.VIS_HALF;
+  }
 
   const PALETTE = [
     "#E8B33C", "#C4482E", "#5B8FD9", "#7FA05A",
@@ -224,6 +238,7 @@
   exp.walkable = walkable;
   exp.walkCell = walkCell;
   exp.hasLOS = hasLOS;
+  exp.inCone = inCone;
   exp.findPath = findPath;
   exp.placeName = placeName;
 })(typeof module !== "undefined" && module.exports ? module.exports : (window.SHARED = {}));

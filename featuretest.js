@@ -31,6 +31,18 @@ async function walkTo(c, x, y, within, timeoutMs = 40000) {
   }
 }
 
+/* حركة قصيرة بخط مستقيم (بدون مسار) لتثبيت الاتجاه */
+async function nudge(c, dx, dy) {
+  const d = Math.hypot(dx, dy), steps = Math.ceil(d / 6);
+  for (let i = 0; i < steps; i++) {
+    await sleep(50);
+    const nx = c.x + (dx / steps), ny = c.y + (dy / steps);
+    if (!S.walkable(nx, ny, C.R)) break;
+    c.x = nx; c.y = ny;
+    c.send({ t: "move", x: Math.round(c.x), y: Math.round(c.y) });
+  }
+}
+
 async function setup(url, n) {
   const cs = [];
   for (let i = 0; i < n; i++) cs.push(new Client(url, "لاعب" + (i + 1)));
@@ -114,10 +126,52 @@ async function testSabotage(url) {
   for (const c of cs) c.close();
 }
 
+async function testCone(url) {
+  console.log("\n▶ مخروط الرؤية");
+  // دالة المخروط نفسها
+  check(S.inCone(0, 0, 0, 200, 0, 300, 110), "نقطة أمامك داخل المدى: مرئية");
+  check(!S.inCone(0, 0, 0, -200, 0, 300, 110), "نقطة وراك خارج الدائرة الصغيرة: غير مرئية");
+  check(S.inCone(0, 0, 0, -100, 0, 300, 110), "نقطة وراك داخل الدائرة الصغيرة: مرئية");
+  check(!S.inCone(0, 0, 0, 350, 0, 300, 110), "نقطة أمامك خارج المدى: غير مرئية");
+  check(S.inCone(0, 0, Math.PI, -200, 0, 300, 110) && !S.inCone(0, 0, Math.PI, 200, 0, 300, 110), "الاتجاه يقلب المخروط");
+  check(S.inCone(0, 0, -Math.PI, 0, -200, 300, 110) === S.inCone(0, 0, Math.PI, 0, -200, 300, 110), "زاوية ±π تعطي نفس النتيجة");
+
+  const cs = await setup(url, 3);
+  const host = cs[0];
+  await waitFor(() => host.st.host, 2000, "المضيف");
+  host.send({ t: "start" });
+  await waitFor(() => cs.every((c) => c.st.ph === "play"), 3000, "بداية الجولة");
+  const a = cs[0], b = cs[1], c = cs[2];
+  // a يمشي لفوق حتى يبعد عن b أكثر من الدائرة الصغيرة وأقل من مدى الرؤية، ووجهه لفوق
+  await walkTo(a, S.SPAWN.x, S.SPAWN.y - 170, 8);
+  await nudge(a, 0, -12); // آخر خطوة لفوق بالضبط عشان يثبت الاتجاه
+  await sleep(250);
+  const d = Math.hypot(a.st.me.x - b.st.me.x, a.st.me.y - b.st.me.y);
+  check(d > C.VIS_NEAR && d < C.VIS_CREW, `المسافة بين a و b ${d.toFixed(0)} (بين ${C.VIS_NEAR} و ${C.VIS_CREW})`);
+  check(Math.abs(a.st.me.face + Math.PI / 2) < 0.3, `وجه a لفوق (face=${a.st.me.face})`);
+  const seesB = () => (a.st.ps || []).some((p) => p.i === b.id);
+  check(!seesB(), "a ما يشوف b اللي وراه");
+  // b يشوف a لأنه واقف يواجه وسط الميدان؟ لا نضمنه، لكن لو مشى صوبه لازم يشوفه
+  await nudge(b, 0, -15);
+  await sleep(250);
+  check((b.st.ps || []).some((p) => p.i === a.id), "b مشى صوب a فصار يشوفه");
+  // a يرجع خطوة لتحت فيقلب وجهه ويشوف b
+  await nudge(a, 0, 15);
+  await sleep(250);
+  check(Math.abs(a.st.me.face - Math.PI / 2) < 0.3, `وجه a صار لتحت (face=${a.st.me.face})`);
+  check(seesB(), "a التفت لتحت فشاف b");
+  // الجثث والمهام ما تتأثر بالمخروط من ناحية الرسم؛ اللاعب القريب جدًا يُرى من كل الجهات
+  void c;
+  for (const x of cs) x.close();
+}
+
 (async () => {
   const url = await startServer();
   try {
     await testSabotage(url);
+    // جولة جديدة بسيرفر جديد عشان الحالة نظيفة (اللاعبون انقطعوا كلهم فرجع السيرفر للوبي)
+    await sleep(300);
+    await testCone(url);
   } catch (e) {
     console.log("  ✗ استثناء:", e.message);
     fails++;

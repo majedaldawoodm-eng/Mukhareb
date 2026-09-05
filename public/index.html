@@ -143,7 +143,7 @@
 const S = window.SHARED, C = S.C;
 const $ = (id) => document.getElementById(id);
 let ws = null, myId = null, st = null, me = null;
-let local = { x: S.SPAWN.x, y: S.SPAWN.y, set: false };
+let local = { x: S.SPAWN.x, y: S.SPAWN.y, face: -Math.PI/2, set: false };
 const stick = { on:false, id:null, bx:0, by:0, dx:0, dy:0 };
 let taskOpen = null;
 
@@ -180,8 +180,9 @@ function show(which) {
 function onState(m) {
   const prev = st;
   st = m; me = m.me;
-  if (!local.set || !prev || prev.ph !== m.ph) { local.x = me.x; local.y = me.y; local.set = true; }
-  if (Math.hypot(local.x - me.x, local.y - me.y) > 70) { local.x = me.x; local.y = me.y; }
+  if (!local.set || !prev || prev.ph !== m.ph) { local.x = me.x; local.y = me.y; local.face = me.face; local.set = true; }
+  if (Math.hypot(local.x - me.x, local.y - me.y) > 70) { local.x = me.x; local.y = me.y; local.face = me.face; }
+  if (!stick.on && typeof me.face === 'number') local.face = me.face; // واقف: خذ اتجاه السيرفر
 
   if (m.ph === 'lobby') { show('lobby'); renderLobby(m); return; }
   show('game');
@@ -394,8 +395,11 @@ function frame(t) {
     const mag = Math.min(1, Math.hypot(stick.dx, stick.dy) / 55);
     const a = Math.atan2(stick.dy, stick.dx);
     const vx = Math.cos(a) * C.SPEED * mag * dt, vy = Math.sin(a) * C.SPEED * mag * dt;
+    const ox = local.x, oy = local.y;
     if (S.walkable(local.x + vx, local.y, C.R)) local.x += vx;
     if (S.walkable(local.x, local.y + vy, C.R)) local.y += vy;
+    // نفس قاعدة السيرفر: الاتجاه من الحركة الفعلية المقبولة
+    if (Math.hypot(local.x - ox, local.y - oy) > 0.5) local.face = Math.atan2(local.y - oy, local.x - ox);
   }
   sendAcc += dt;
   if (sendAcc > .05 && st.ph === 'play') { sendAcc = 0; send({ t:'move', x:Math.round(local.x), y:Math.round(local.y) }); }
@@ -479,16 +483,42 @@ function draw() {
   ctx.restore();
 
   /* الظلمة */
-  if (me && me.alive && st.ph === 'play') {
-    // نفس المدى اللي يستخدمه السيرفر للفلترة، عشان ما ترسم شي ما وصلك أو تحجب شي وصلك
-    const v = (me.vis || (me.imp ? C.VIS_IMP : C.VIS_CREW)) * scale;
-    const g = ctx.createRadialGradient(w/2, h/2, v * .55, w/2, h/2, v);
-    g.addColorStop(0, 'rgba(20,18,14,0)'); g.addColorStop(1, 'rgba(20,18,14,.96)');
-    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
-    if (st.sab > 0) { ctx.fillStyle = 'rgba(30,20,50,.35)'; ctx.fillRect(0, 0, w, h); }
-  }
+  if (me && me.alive && st.ph === 'play') drawFog(w, h, scale);
 
   /* العصا */
+  drawStick();
+}
+
+/* الظلمة: طبقة معتمة نقصّ منها دائرة صغيرة حول اللاعب ومخروط باتجاه مشيه.
+   نفس الأرقام اللي يفلتر بها السيرفر (me.vis و C.VIS_NEAR و C.VIS_HALF) */
+const fog = document.createElement('canvas'), fctx = fog.getContext('2d');
+function drawFog(w, h, scale) {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  if (fog.width !== cv.width || fog.height !== cv.height) { fog.width = cv.width; fog.height = cv.height; }
+  fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  fctx.globalCompositeOperation = 'source-over';
+  fctx.fillStyle = st.sab > 0 ? 'rgba(24,18,30,.97)' : 'rgba(20,18,14,.96)';
+  fctx.fillRect(0, 0, w, h);
+  fctx.globalCompositeOperation = 'destination-out';
+  const cx = w/2, cy = h/2;
+  const v = (me.vis || (me.imp ? C.VIS_IMP : C.VIS_CREW)) * scale;
+  const near = Math.min(C.VIS_NEAR, me.vis || C.VIS_NEAR) * scale;
+  // الدائرة الصغيرة
+  let g = fctx.createRadialGradient(cx, cy, near * .5, cx, cy, near);
+  g.addColorStop(0, 'rgba(0,0,0,1)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+  fctx.fillStyle = g; fctx.beginPath(); fctx.arc(cx, cy, near, 0, 7); fctx.fill();
+  // المخروط
+  fctx.save();
+  fctx.beginPath(); fctx.moveTo(cx, cy);
+  fctx.arc(cx, cy, v, local.face - C.VIS_HALF, local.face + C.VIS_HALF); fctx.closePath(); fctx.clip();
+  g = fctx.createRadialGradient(cx, cy, v * .55, cx, cy, v);
+  g.addColorStop(0, 'rgba(0,0,0,1)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+  fctx.fillStyle = g; fctx.fillRect(cx - v, cy - v, v * 2, v * 2);
+  fctx.restore();
+  ctx.drawImage(fog, 0, 0, w, h);
+}
+
+function drawStick() {
   if (stick.on) {
     ctx.beginPath(); ctx.arc(stick.bx, stick.by, 52, 0, 7);
     ctx.fillStyle = 'rgba(237,230,214,.08)'; ctx.fill();
